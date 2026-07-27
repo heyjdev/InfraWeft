@@ -13,7 +13,7 @@ A local-first visual prototype for designing Azure network topologies, discoveri
 - Reject direct peering connections between overlapping VNet address spaces.
 - Flag invalid/non-canonical IPv4 CIDRs and overlapping address spaces on peered VNets; disconnected VNets may intentionally overlap.
 - Save designs to browser local storage.
-- Import VNets, bidirectional peering relationships, and common network appliances from an Azure subscription using read-only Azure CLI commands.
+- Import VNets, every VNet address prefix, bidirectional peering relationships, and common network appliances from an Azure subscription using read-only Azure CLI commands.
 - Export the deployable VNet/peering layer as Terraform, Bicep, or an Azure CLI Bash script.
 
 ## Run locally
@@ -36,7 +36,7 @@ az login
 az account set --subscription '<subscription-id>'
 ```
 
-Then use **Import Azure** in the UI. The API executes fixed `az` argument arrays; it does not accept arbitrary commands, store tokens, or send credentials to the browser. Azure CLI's existing local token cache remains the source of authentication.
+Then use **Import Azure** in the UI. The API executes fixed `az` argument arrays; it does not accept arbitrary commands, store tokens, or send credentials to the browser. Azure CLI's existing local token cache remains the source of authentication. Imported VNets are diagram-only and block deployment export until a future explicit adopt/manage workflow is implemented.
 
 ## Verify
 
@@ -54,6 +54,7 @@ This is deliberately not a production deployment portal yet.
 - Bicep output targets the subscription scope and supports existing resource groups in that subscription. Mixed-subscription export is blocked.
 - Terraform and Azure CLI output require an explicit subscription ID; imported designs carry it forward automatically.
 - Azure import discovers topology; it does not modify the subscription.
+- The loopback API validates Host/Origin headers, rate-limits discovery, coalesces concurrent requests, and caches topology briefly to avoid spawning redundant Azure CLI processes.
 - IPv4 CIDR validation is implemented. IPv6 and Azure-specific subnet reservations are future work.
 - Generated output must be reviewed and run through `terraform validate`, `az bicep build`, or a deployment what-if before use.
 - LLM-driven design should be added through a provider-neutral tool schema that produces proposed graph mutations; the deterministic validator must remain the final authority.

@@ -43,11 +43,41 @@ export const RESOURCE_LABELS: Record<ResourceKind, string> = {
   firewall: 'Azure Firewall', vpnGateway: 'VPN Gateway', loadBalancer: 'Load Balancer', privateEndpoint: 'Private Endpoint',
 }
 
+const RESOURCE_KINDS = new Set<ResourceKind>(Object.keys(RESOURCE_LABELS) as ResourceKind[])
+const boundedString = (value: unknown, max = 512): value is string => typeof value === 'string' && value.length > 0 && value.length <= max
+
+export function isNetworkDesign(value: unknown): value is NetworkDesign {
+  if (!value || typeof value !== 'object') return false
+  const design = value as Partial<NetworkDesign>
+  if (!boundedString(design.name, 200) || !Array.isArray(design.nodes) || !Array.isArray(design.edges) || design.nodes.length > 5000 || design.edges.length > 10000) return false
+  const ids = new Set<string>()
+  for (const candidate of design.nodes) {
+    const node = candidate as Partial<NetworkNode>
+    const data = node.data as Partial<NetworkNodeData> | undefined
+    if (!boundedString(node.id) || ids.has(node.id) || node.type !== 'azureResource' || !node.position || !Number.isFinite(node.position.x) || !Number.isFinite(node.position.y) || !data || !boundedString(data.label, 256) || !RESOURCE_KINDS.has(data.kind as ResourceKind)) return false
+    if (data.addressSpace !== undefined && !boundedString(data.addressSpace, 64)) return false
+    if (data.addressSpaces && (!Array.isArray(data.addressSpaces) || data.addressSpaces.length > 32 || data.addressSpaces.some((item) => !boundedString(item, 64)))) return false
+    if (data.region !== undefined && !boundedString(data.region, 128)) return false
+    if (data.resourceGroup !== undefined && !boundedString(data.resourceGroup, 256)) return false
+    if (data.subscriptionId !== undefined && !boundedString(data.subscriptionId, 64)) return false
+    if (data.imported !== undefined && typeof data.imported !== 'boolean') return false
+    ids.add(node.id)
+  }
+  const edgeIds = new Set<string>()
+  for (const candidate of design.edges) {
+    const edge = candidate as Partial<NetworkEdge>
+    if (!boundedString(edge.id) || edgeIds.has(edge.id) || !boundedString(edge.source) || !boundedString(edge.target) || !ids.has(edge.source) || !ids.has(edge.target)) return false
+    if (edge.data?.kind && !['peering', 'attachment'].includes(edge.data.kind)) return false
+    edgeIds.add(edge.id)
+  }
+  return true
+}
+
 const ipv4ToInt = (ip: string) => ip.split('.').reduce((acc, octet) => (acc * 256) + Number(octet), 0) >>> 0
 
 export function parseCidr(cidr?: string): { start: number; end: number; prefix: number } | null {
-  if (!cidr) return null
-  const [ip, prefixText, ...extra] = cidr.trim().split('/')
+  if (!cidr || cidr !== cidr.trim()) return null
+  const [ip, prefixText, ...extra] = cidr.split('/')
   const rawOctets = ip?.split('.')
   if (!rawOctets || rawOctets.length !== 4 || rawOctets.some((octet) => !/^\d{1,3}$/.test(octet))) return null
   const octets = rawOctets.map(Number)
@@ -72,8 +102,17 @@ export const nodesOverlap = (a: NetworkNode, b: NetworkNode) => addressSpacesFor
 export function validateDesign(nodes: NetworkNode[], edges: NetworkEdge[]) {
   const issues: string[] = []
   const vnets = nodes.filter((node) => node.data.kind === 'vnet')
-  for (const node of vnets) for (const cidr of addressSpacesFor(node)) if (!parseCidr(cidr)) issues.push(`${node.data.label}: invalid or non-canonical IPv4 CIDR`)
+  for (const node of vnets) for (const cidr of addressSpacesFor(node)) {
+    const parsed = parseCidr(cidr)
+    if (!parsed) issues.push(`${node.data.label}: invalid or non-canonical IPv4 CIDR`)
+    else if (parsed.prefix < 2 || parsed.prefix > 29) issues.push(`${node.data.label}: Azure VNet IPv4 prefixes must be /2 through /29`)
+  }
   for (const node of vnets) if (addressSpacesFor(node).length === 0) issues.push(`${node.data.label}: address space is required`)
+  for (const node of vnets) {
+    const ranges = addressSpacesFor(node)
+    for (let i = 0; i < ranges.length; i++) for (let j = i + 1; j < ranges.length; j++) if (cidrsOverlap(ranges[i], ranges[j])) issues.push(`${node.data.label}: address spaces overlap each other`)
+  }
+  if (vnets.some((node) => node.data.imported)) issues.push('Imported VNets are diagram-only until explicitly adopted for management')
   const subscriptions = new Set(nodes.map((node) => node.data.subscriptionId).filter(Boolean))
   if (subscriptions.size > 1) issues.push('Mixed-subscription export is not supported')
   const resourceNames = new Set<string>()

@@ -4,7 +4,7 @@ import '@xyflow/react/dist/style.css'
 import { Boxes, CircleDot, CloudDownload, Code2, Copy, Download, Flame, PanelsTopLeft, GitBranch, Globe2, Menu, Network, Plus, Router, Save, Search, ShieldCheck, Trash2, WandSparkles, X, Zap } from 'lucide-react'
 import './App.css'
 import { generateInfrastructure, type ExportFormat } from './generators'
-import { addressSpacesFor, nodesOverlap, RESOURCE_LABELS, starterDesign, validateDesign, type NetworkEdge, type NetworkNode, type NetworkNodeData, type ResourceKind } from './model'
+import { addressSpacesFor, isNetworkDesign, nodesOverlap, RESOURCE_LABELS, starterDesign, validateDesign, type NetworkEdge, type NetworkNode, type NetworkNodeData, type ResourceKind } from './model'
 
 const iconMap: Record<ResourceKind, typeof Network> = { vnet: Network, subnet: Boxes, appGateway: PanelsTopLeft, natGateway: Router, firewall: Flame, vpnGateway: ShieldCheck, loadBalancer: GitBranch, privateEndpoint: CircleDot }
 const colors: Record<ResourceKind, string> = { vnet: '#0078d4', subnet: '#6b69d6', appGateway: '#8b5cf6', natGateway: '#00a4ef', firewall: '#e15241', vpnGateway: '#107c10', loadBalancer: '#008272', privateEndpoint: '#c239b3' }
@@ -29,8 +29,8 @@ function loadInitialDesign() {
   try {
     const saved = localStorage.getItem('azure-network-studio-design')
     if (!saved) return starterDesign
-    const parsed = JSON.parse(saved)
-    return Array.isArray(parsed?.nodes) && Array.isArray(parsed?.edges) ? parsed : starterDesign
+    const parsed: unknown = JSON.parse(saved)
+    return isNetworkDesign(parsed) ? parsed : starterDesign
   } catch { return starterDesign }
 }
 
@@ -50,6 +50,7 @@ function Studio() {
   const selected = nodes.find((node) => node.id === selectedId)
   const issues = useMemo(() => validateDesign(nodes as NetworkNode[], edges as NetworkEdge[]), [nodes, edges])
   const generated = useMemo(() => generateInfrastructure(nodes as NetworkNode[], edges as NetworkEdge[], format), [nodes, edges, format])
+  const targetSubscription = useMemo(() => [...new Set(nodes.map((node) => node.data.subscriptionId).filter(Boolean))].join(', ') || 'Set explicitly at deployment', [nodes])
 
   useEffect(() => { if (!notice || notice === 'Ready') return; const timer = setTimeout(() => setNotice('Ready'), 4000); return () => clearTimeout(timer) }, [notice])
 
@@ -83,7 +84,7 @@ function Studio() {
   }
   async function importTopology() {
     if (!subscriptionId) return; setLoading(true)
-    try { const response = await fetch(`/api/azure/topology?subscriptionId=${encodeURIComponent(subscriptionId)}`); const body = await response.json(); if (!response.ok) throw new Error(body.error); setNodes(body.nodes); setEdges(body.edges); setImportOpen(false); setNotice(`Imported ${body.nodes.length} Azure resources`) }
+    try { const response = await fetch(`/api/azure/topology?subscriptionId=${encodeURIComponent(subscriptionId)}`); const body: unknown = await response.json(); if (!response.ok) throw new Error((body as { error?: string }).error); const warningCount = body && typeof body === 'object' && 'warnings' in body && Array.isArray(body.warnings) ? body.warnings.length : 0; if (!isNetworkDesign(body)) throw new Error('Azure discovery returned an invalid topology.'); setNodes(body.nodes); setEdges(body.edges); setSelectedId(null); setImportOpen(false); setNotice(`Imported ${body.nodes.length} Azure resources${warningCount ? ` with ${warningCount} warning${warningCount > 1 ? 's' : ''}` : ''}`) }
     catch (error) { setNotice(error instanceof Error ? error.message : 'Import failed') } finally { setLoading(false) }
   }
 
@@ -106,7 +107,7 @@ function Studio() {
         <div className="workspace-bar"><div><Globe2 size={15}/><strong>Hub and spoke prototype</strong><span>eastus</span></div><div className="legend"><span><i className="dot imported"/> Imported</span><span><i className="line"/> Peering</span></div></div>
         {mode === 'design' ? <ReactFlow nodes={nodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} nodeTypes={nodeTypes} onNodeClick={(_, node) => setSelectedId(node.id)} onPaneClick={() => setSelectedId(null)} fitView minZoom={0.25} maxZoom={1.8} deleteKeyCode={null}>
           <Background color="#dce6f1" gap={24}/><MiniMap nodeColor={(node) => colors[(node.data as NetworkNodeData).kind]} maskColor="rgba(241,246,251,.72)"/><Controls position="bottom-center" />
-        </ReactFlow> : <div className="code-workspace"><div className="code-toolbar"><div className="segment">{(['terraform','bicep','azureCli'] as ExportFormat[]).map((item) => <button key={item} className={format === item ? 'active' : ''} onClick={() => setFormat(item)}>{item === 'azureCli' ? 'Azure CLI' : item[0].toUpperCase() + item.slice(1)}</button>)}</div><div><button disabled={issues.length > 0} onClick={copyCode}><Copy size={15}/> Copy</button><button disabled={issues.length > 0} className="primary" onClick={download}><Download size={15}/> Download</button></div></div>{issues.length > 0 && <div className="validation-banner"><ShieldCheck size={17}/><div><strong>Generation blocked by design issues</strong>{issues.map((issue) => <span key={issue}>{issue}</span>)}</div></div>}<pre><code>{generated}</code></pre></div>}
+        </ReactFlow> : <div className="code-workspace"><div className="code-toolbar"><div className="segment">{(['terraform','bicep','azureCli'] as ExportFormat[]).map((item) => <button key={item} className={format === item ? 'active' : ''} onClick={() => setFormat(item)}>{item === 'azureCli' ? 'Azure CLI' : item[0].toUpperCase() + item.slice(1)}</button>)}</div><div><button disabled={issues.length > 0} onClick={copyCode}><Copy size={15}/> Copy</button><button disabled={issues.length > 0} className="primary" onClick={download}><Download size={15}/> Download</button></div></div><div className="code-target"><span>Target subscription</span><strong>{targetSubscription}</strong></div>{issues.length > 0 && <div className="validation-banner"><ShieldCheck size={17}/><div><strong>Generation blocked by design issues</strong>{issues.map((issue) => <span key={issue}>{issue}</span>)}</div></div>}<pre><code>{generated}</code></pre></div>}
       </section>
       <aside className="inspector-panel">
         <div className="panel-title"><span>Properties</span>{selected && <button onClick={() => setSelectedId(null)}><X size={16}/></button>}</div>
@@ -118,7 +119,7 @@ function Studio() {
           <div className="meta-row"><span>Source</span><strong>{selected.data.imported ? 'Azure subscription' : 'Prototype'}</strong></div>
           <button className="danger" onClick={removeSelected}><Trash2 size={15}/> Remove resource</button>
         </div> : <div className="empty"><Network size={34}/><strong>Select a resource</strong><p>Choose a node to edit its network settings.</p></div>}
-        <div className="validation"><div className="validation-title"><ShieldCheck size={16}/><strong>Design validation</strong><span>{issues.length || '✓'}</span></div>{issues.length ? issues.map((issue) => <p key={issue}>{issue}</p>) : <p className="valid">No CIDR conflicts. Topology is exportable.</p>}</div>
+        <div className="validation"><div className="validation-title"><ShieldCheck size={16}/><strong>Design validation</strong><span>{issues.length || '✓'}</span></div>{issues.length ? issues.map((issue) => <p key={issue}>{issue}</p>) : <p className="valid">No invalid or overlapping peering relationships. Topology is exportable.</p>}</div>
       </aside>
     </main>
     {importOpen && <div className="modal-backdrop"><div className="modal"><button className="modal-close" onClick={() => setImportOpen(false)}><X size={18}/></button><div className="modal-icon"><CloudDownload size={24}/></div><h2>Import from Azure</h2><p>Uses your local Azure CLI session with read-only list/show operations. No credentials are stored by this app.</p>{loading && !subscriptions.length ? <div className="loading">Checking Azure CLI session…</div> : subscriptions.length ? <><label>Subscription<select value={subscriptionId} onChange={(e) => setSubscriptionId(e.target.value)}>{subscriptions.map((subscription) => <option key={subscription.id} value={subscription.id}>{subscription.name}{subscription.isDefault ? ' (default)' : ''}</option>)}</select></label><button className="primary wide" disabled={loading} onClick={importTopology}>{loading ? 'Discovering…' : 'Import network topology'}</button></> : <div className="import-error"><strong>Azure CLI is not ready</strong><p>Install <code>az</code> and run <code>az login</code>, then retry. The account needs Reader access.</p><button onClick={openImport}>Retry</button></div>}</div></div>}

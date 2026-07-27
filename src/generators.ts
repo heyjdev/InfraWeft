@@ -5,7 +5,12 @@ const q = (value?: string) => JSON.stringify(value ?? '')
 const bq = (value?: string) => `'${(value ?? '').replaceAll("'", "''")}'`
 const vnets = (nodes: NetworkNode[]) => nodes.filter((node) => node.data.kind === 'vnet')
 const peerings = (edges: NetworkEdge[]) => edges.filter((edge) => edge.data?.kind === 'peering')
-const resourceKey = (node: NetworkNode) => safe(`${node.data.resourceGroup || 'rg_network'}_${node.data.label}`)
+const stableSuffix = (value: string) => {
+  let hash = 0x811c9dc5
+  for (let index = 0; index < value.length; index++) { hash ^= value.charCodeAt(index); hash = Math.imul(hash, 0x01000193) }
+  return (hash >>> 0).toString(36).padStart(7, '0').slice(-7)
+}
+const resourceKey = (node: NetworkNode) => `${safe(`${node.data.resourceGroup || 'rg_network'}_${node.data.label}`).slice(0, 64)}_${stableSuffix(node.id)}`
 const omittedKinds = (nodes: NetworkNode[]) => [...new Set(nodes.filter((node) => node.data.kind !== 'vnet').map((node) => node.data.kind))]
 const subscriptionFor = (nodes: NetworkNode[]) => [...new Set(nodes.map((node) => node.data.subscriptionId).filter((id): id is string => Boolean(id)))][0]
 
@@ -91,7 +96,9 @@ function bicep(nodes: NetworkNode[], edges: NetworkEdge[]) {
   }
 }`)
   }
-  return `targetScope = 'subscription'\n\n// Deploy to subscription: ${subscriptionFor(nodes) || '<set explicitly>'}\n${scopeNote(nodes, '//')}${groupDeclarations}\n\n${resources.join('\n\n')}\n\n${peeringResources.join('\n\n')}\n`
+  const targetSubscription = subscriptionFor(nodes) || '<AZURE_SUBSCRIPTION_ID>'
+  const deploymentLocation = vnets(nodes)[0]?.data.region || 'eastus'
+  return `targetScope = 'subscription'\n\n// Deploy: az deployment sub create --subscription ${targetSubscription} --location ${deploymentLocation} --template-file network.bicep\n${scopeNote(nodes, '//')}${groupDeclarations}\n\n${resources.join('\n\n')}\n\n${peeringResources.join('\n\n')}\n`
 }
 
 function azureCli(nodes: NetworkNode[], edges: NetworkEdge[]) {
