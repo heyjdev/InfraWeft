@@ -1,6 +1,7 @@
 import express from 'express'
 import { execFile } from 'node:child_process'
 import { promisify } from 'node:util'
+import { validateGeneratedCode, validateRequest } from './validation.js'
 
 const app = express()
 const exec = promisify(execFile)
@@ -17,7 +18,7 @@ app.use((req, res, next) => {
   const host = req.get('host')
   const fetchSite = req.get('sec-fetch-site')
   if (!host || !allowedHosts.has(host) || (origin && !allowedOrigins.has(origin)) || fetchSite === 'cross-site') return res.status(403).json({ error: 'Cross-site requests are not allowed.' })
-  if (req.path.startsWith('/api/azure/')) {
+  if (req.path.startsWith('/api/azure/') || req.path === '/api/validate') {
     const now = Date.now()
     discoveryRequests = discoveryRequests.filter((timestamp) => timestamp > now - 60_000)
     if (discoveryRequests.length >= 30) return res.status(429).json({ error: 'Too many Azure discovery requests. Retry in one minute.' })
@@ -68,6 +69,17 @@ async function discoverTopology(subscriptionId: string) {
 }
 
 app.get('/api/health', (_req, res) => res.json({ ok: true }))
+
+app.post('/api/validate', async (req, res) => {
+  const request = validateRequest(req.body)
+  if (!request.ok) return res.status(400).json({ error: request.error })
+  try {
+    const result = await validateGeneratedCode(request.format, request.code)
+    res.status(result.ok ? 200 : 422).json(result)
+  } catch {
+    res.status(503).json({ error: 'Local validation could not be started.' })
+  }
+})
 
 app.get('/api/azure/subscriptions', async (_req, res) => {
   try {
