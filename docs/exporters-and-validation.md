@@ -43,11 +43,7 @@ Standard Bicep output targets one resource group. A design spanning multiple res
 
 Open **Generate**, select **AVNM**, and review the conversion preview. Exact complete peering graphs infer Mesh; exact stars infer Hub-and-Spoke. Irregular, partial, duplicate, or self-looped graphs require correction or an explicit topology decision.
 
-The exporter targets an **existing, dedicated** Network Manager. It does not create or silently alter a same-named manager, its scopes, or access configuration. Export remains blocked until the user acknowledges the dedicated-manager prerequisite and provides complete regional commit history.
-
-Generated Terraform, Bicep, and Azure CLI artifacts use fingerprinted network-group and connectivity-configuration identities, stable member identities, and explicit regional activation. Removed regions require an empty commit because AVNM regional connectivity commits are complete goal state, not additive updates.
-
-The current AVNM scope excludes manager bootstrap/adoption, shared-manager goal-state merging, management-group scope, dynamic Azure Policy membership, routing/security-admin configuration, and automatic cleanup of older fingerprinted configurations.
+AVNM export targets an existing dedicated Network Manager and requires complete regional commit history because regional connectivity commits are complete goal state, not additive updates. Read the [Azure Virtual Network Manager conversion guide](avnm.md) before generating or deploying AVNM output; it documents manager prerequisites, replacement identity, removed-region commits, format-specific confirmation controls, and current boundaries.
 
 ## External deployment review
 

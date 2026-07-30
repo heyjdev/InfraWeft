@@ -15,7 +15,7 @@
   <img src="docs/assets/infraweft-demo.gif" alt="InfraWeft creating a cloud network design and generating Terraform" width="100%">
 </p>
 
-InfraWeft is a **local-first visual designer** for cloud network topology. Build or import an Azure design, inspect deployment constraints, and generate deterministic Terraform, Bicep, or Azure CLI artifacts without sending the design to a hosted service.
+InfraWeft is a **local-first visual cloud infrastructure designer**. Weave topology into infrastructure code. Build or import an Azure topology, inspect deployment constraints, and generate deterministic Terraform, Bicep, or Azure CLI artifacts without sending the design to a hosted service.
 
 > [!WARNING]
 > InfraWeft is pre-release software. Review generated artifacts and run provider-native validation or deployment what-if before using them against a cloud environment.
@@ -71,7 +71,7 @@ See [Getting started](docs/getting-started.md) for development mode, optional to
 
 1. **Design** a topology manually or create a deterministic Random showcase.
 2. **Inspect** properties, typed relationships, validation findings, and exporter capability.
-3. **Import** Azure topology when needed; imported resources stay diagram-only until adoption.
+3. **Import** an Azure topology baseline when needed; VNet address spaces and peerings are discovered, while appliance nodes currently preserve summary identity and scope only. Imported resources stay diagram-only until adoption.
 4. **Generate** Terraform, Bicep, or Azure CLI output.
 5. **Validate** locally, then review the artifact before any external deployment workflow.
 
@@ -95,7 +95,10 @@ The loopback API validates Host and Origin headers, rate-limits expensive operat
 
 - [Getting started](docs/getting-started.md)
 - [User guide](docs/user-guide.md)
+- [Azure import](docs/azure-import.md)
 - [Exporters and validation](docs/exporters-and-validation.md)
+- [Azure Virtual Network Manager conversion](docs/avnm.md)
+- [Changelog](CHANGELOG.md)
 - [Privacy and local data](PRIVACY.md)
 - [Security policy](SECURITY.md)
 - [Support](SUPPORT.md)

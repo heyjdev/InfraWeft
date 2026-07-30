@@ -2,7 +2,7 @@
   "name": "infraweft",
   "private": false,
   "version": "0.1.0",
-  "description": "Local-first visual cloud infrastructure designer and deterministic code generator.",
+  "description": "A local-first visual cloud infrastructure designer. Weave topology into infrastructure code.",
   "license": "Apache-2.0",
   "homepage": "https://github.com/heyjdev/InfraWeft#readme",
   "repository": {
@@ -38,9 +38,14 @@
     "dist-server/",
     "LICENSE",
     "NOTICE",
+    "CHANGELOG.md",
+    "docs/*.md",
+    "docs/assets/",
+    "src/assets/logo-wordmark.svg",
     "PRIVACY.md",
     "README.md",
-    "SECURITY.md"
+    "SECURITY.md",
+    "SUPPORT.md"
   ],
   "scripts": {
     "dev": "concurrently -k -n API,UI -c cyan,blue \"npm:dev:api\" \"npm:dev:ui\"",

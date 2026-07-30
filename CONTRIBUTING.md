@@ -24,6 +24,19 @@ npm run build
 node bin/infraweft.mjs doctor
 ```
 
+## Code map
+
+- `src/model.ts` — canonical resource schemas, relationships, validation, defaults, and capability metadata.
+- `src/App.tsx` — workspace orchestration and user workflows.
+- `src/generators.ts` — Terraform, Bicep, and Azure CLI lowering.
+- `src/avnm.ts` — Azure Virtual Network Manager conversion.
+- `src/designState.ts` — persistence, migration, snapshots, imported baselines, and diffs.
+- `server/index.ts` — loopback API and read-only Azure discovery.
+- `server/validation.ts` — isolated local artifact-validation policy.
+- `scripts/package-smoke.mjs` — clean packed-install and launcher verification.
+
+Resource-model or exporter changes should include positive and negative fixtures, prove that unsupported configuration blocks instead of disappearing, and cover every backend whose capability claim changes. Persistence changes require migration tests. Server execution changes require adversarial input tests and must preserve fixed executable/argument boundaries.
+
 ## Required checks
 
 Before submitting a change:

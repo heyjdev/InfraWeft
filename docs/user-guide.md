@@ -15,6 +15,21 @@ Drag a component onto the canvas, then select it to configure provider-facing na
 
 InfraWeft rejects invalid relationships such as direct peering between overlapping VNet address spaces. Validation also reports non-canonical CIDRs, missing dependencies, incompatible cardinality, and exporter-specific blockers.
 
+Current typed deployment relationships are:
+
+| Relationship | Generated meaning |
+| --- | --- |
+| VNet ↔ VNet | Peering |
+| Subnet ↔ Network Security Group | Subnet NSG association |
+| Subnet ↔ route table | Subnet route-table association |
+| Subnet ↔ NAT Gateway | Subnet NAT association |
+| NAT Gateway ↔ Public IP | NAT public-IP association |
+| Azure Firewall ↔ subnet | Firewall IP configuration |
+| Azure Firewall ↔ Public IP | Firewall public-IP configuration |
+| Application Gateway ↔ Public IP | Public frontend configuration |
+
+Generic attachment edges are not substitutes for these typed deployment semantics.
+
 ## Random showcase
 
 Select **Random showcase** to build a reproducible demo:
@@ -39,9 +54,11 @@ Browser storage is not a team database or backup system. Treat exported browser 
 
 ## Import Azure
 
-**Import Azure** runs fixed, read-only Azure CLI queries through the local API. It discovers VNets, address prefixes, peerings, and supported network appliances from the selected subscription.
+**Import Azure** runs fixed, read-only Azure CLI queries through the local API. It discovers VNets, every VNet address prefix, and peering relationships. For Application Gateways, Azure Firewalls, NAT Gateways, Virtual Network Gateways, Load Balancers, and Private Endpoints, the current importer creates summary nodes containing identity and scope metadata only; it does not reconstruct nested configuration or associations.
 
-Imported resources begin as references and remain diagram-only. Select **Adopt for management** only after reviewing the imported baseline and generated changes. Import is not Terraform state adoption, and InfraWeft does not modify Azure during discovery.
+The result is an imported topology baseline, not a complete representation of Azure resource configuration. Imported resources begin as references and remain diagram-only. Select **Adopt for management** only after reviewing the imported baseline and generated changes. Import is not Terraform state adoption, and InfraWeft does not modify Azure during discovery.
+
+See [Azure import](azure-import.md) for the exact discovery boundary, partial-query behavior, privacy guidance, and troubleshooting.
 
 ## Generate infrastructure code
 
