@@ -1,3 +1,4 @@
+import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { validationPlan, validateRequest } from '../server/validation'
 
@@ -5,7 +6,7 @@ describe('generated artifact validation planning', () => {
   it('uses fixed executable arguments and never executes generated Azure CLI content', () => {
     const plan = validationPlan('azureCli', '/tmp/safe')
     expect(plan.fileName).toBe('network.sh')
-    expect(plan.steps).toEqual([{ name: 'Bash syntax', command: 'bash', args: ['-n', '/tmp/safe/network.sh'] }])
+    expect(plan.steps).toEqual([{ name: 'Bash syntax', command: 'bash', args: ['-n', join('/tmp/safe', 'network.sh')] }])
   })
 
   it('uses backend-free noninteractive Terraform initialization before validation', () => {

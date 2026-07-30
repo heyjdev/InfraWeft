@@ -14,6 +14,19 @@ function runNpm(args, options = {}) {
   return spawnSync(process.platform === 'win32' ? 'npm.cmd' : 'npm', args, { ...options, shell: process.platform === 'win32' })
 }
 
+async function stopChild() {
+  if (!child || child.exitCode !== null) return
+  const processToStop = child
+  const closed = new Promise((resolve) => processToStop.once('close', resolve))
+  processToStop.kill('SIGTERM')
+  await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 5_000))])
+  if (processToStop.exitCode === null) {
+    processToStop.kill('SIGKILL')
+    await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 5_000))])
+  }
+  child = undefined
+}
+
 async function freePort() {
   return new Promise((resolve, reject) => {
     const server = createServer()
@@ -55,8 +68,8 @@ try {
   const packageJson = JSON.parse(await readFile(join(packageDirectory, 'package.json'), 'utf8'))
   if (!packageJson.bin?.infraweft) throw new Error('Packed package has no CLI bin entry')
   const port = await freePort()
-  const executable = join(installDirectory, 'node_modules', '.bin', process.platform === 'win32' ? 'infraweft.cmd' : 'infraweft')
-  child = spawn(executable, ['--no-open', '--port', String(port)], { cwd: installDirectory, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' })
+  const packageEntrypoint = join(packageDirectory, packageJson.bin.infraweft)
+  child = spawn(process.execPath, [packageEntrypoint, '--no-open', '--port', String(port)], { cwd: installDirectory, stdio: ['ignore', 'pipe', 'pipe'] })
   let output = ''
   child.stdout.on('data', (chunk) => { output += chunk })
   child.stderr.on('data', (chunk) => { output += chunk })
@@ -65,12 +78,13 @@ try {
   if (body.ok !== true) throw new Error('Packaged health endpoint returned an unexpected body')
   const page = await (await waitFor(`http://127.0.0.1:${port}/`)).text()
   if (!page.includes('<div id="root"></div>')) throw new Error('Packaged UI was not served')
-  child.kill('SIGTERM')
+  await stopChild()
   console.log(`Package smoke test passed at http://127.0.0.1:${port}`)
 } catch (error) {
-  if (child) child.kill('SIGTERM')
+  await stopChild()
   console.error(error instanceof Error ? error.message : error)
   process.exitCode = 1
 } finally {
-  await rm(temporary, { recursive: true, force: true })
+  await stopChild()
+  await rm(temporary, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 })
 }
