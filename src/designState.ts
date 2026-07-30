@@ -18,9 +18,49 @@ export type DesignSnapshot = {
   design: NetworkDesign
 }
 
-export type DesignStorage = Pick<Storage, 'getItem' | 'setItem'>
-export const SNAPSHOT_STORAGE_KEY = 'azure-network-studio-snapshots'
+export type DesignStorage = Pick<Storage, 'getItem' | 'setItem'> & Partial<Pick<Storage, 'removeItem'>>
+export const BLANK_DESIGN: NetworkDesign = { name: 'Untitled design', nodes: [], edges: [] }
+export const SNAPSHOT_STORAGE_KEY = 'infraweft-snapshots'
+export const CURRENT_DESIGN_STORAGE_KEY = 'infraweft-design'
+export const LEGACY_SNAPSHOT_STORAGE_KEY = 'azure-network-studio-snapshots'
+export const LEGACY_CURRENT_DESIGN_STORAGE_KEY = 'azure-network-studio-design'
 const MAX_SNAPSHOTS = 20
+const SENSITIVE_KEY = /(?:password|secret|token|api[_-]?key|credential)/i
+
+function sanitizeValue(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sanitizeValue)
+  if (!value || typeof value !== 'object') return value
+  const sanitized: Record<string, unknown> = {}
+  for (const [key, item] of Object.entries(value as Record<string, unknown>)) {
+    if (key === 'radius_server_secret') {
+      if (item) sanitized.radius_secret_required = true
+      continue
+    }
+    if (SENSITIVE_KEY.test(key)) continue
+    sanitized[key] = sanitizeValue(item)
+  }
+  return sanitized
+}
+
+export function sanitizeDesign(design: NetworkDesign): NetworkDesign {
+  return sanitizeValue(design) as NetworkDesign
+}
+
+export function loadCurrentDesign(storage: DesignStorage): NetworkDesign {
+  try {
+    const current = storage.getItem(CURRENT_DESIGN_STORAGE_KEY)
+    const saved = current ?? storage.getItem(LEGACY_CURRENT_DESIGN_STORAGE_KEY)
+    if (!saved) return BLANK_DESIGN
+    const parsed: unknown = JSON.parse(saved)
+    if (!isNetworkDesign(parsed)) return BLANK_DESIGN
+    const safeDesign = sanitizeDesign(parsed)
+    if (!current) saveCurrentDesign(storage, safeDesign)
+    storage.removeItem?.(LEGACY_CURRENT_DESIGN_STORAGE_KEY)
+    return safeDesign
+  } catch {
+    return BLANK_DESIGN
+  }
+}
 
 const stable = (value: unknown): string => {
   if (Array.isArray(value)) return `[${value.map(stable).join(',')}]`
@@ -65,7 +105,7 @@ export function createSnapshot(design: NetworkDesign, name: string, now = new Da
     schemaVersion: 1,
     azureRmVersion: '4.81.0',
     generatorVersion: '0.1.0',
-    design: structuredClone(design),
+    design: sanitizeDesign(design),
   }
 }
 
@@ -77,12 +117,24 @@ function isSnapshot(value: unknown): value is DesignSnapshot {
 
 export function loadSnapshots(storage: DesignStorage): DesignSnapshot[] {
   try {
-    const parsed: unknown = JSON.parse(storage.getItem(SNAPSHOT_STORAGE_KEY) ?? '[]')
-    return Array.isArray(parsed) && parsed.length <= MAX_SNAPSHOTS && parsed.every(isSnapshot) ? parsed : []
+    const current = storage.getItem(SNAPSHOT_STORAGE_KEY)
+    const parsed: unknown = JSON.parse(current ?? storage.getItem(LEGACY_SNAPSHOT_STORAGE_KEY) ?? '[]')
+    if (!Array.isArray(parsed) || parsed.length > MAX_SNAPSHOTS || !parsed.every(isSnapshot)) return []
+    const sanitized = parsed.map((snapshot) => ({ ...snapshot, design: sanitizeDesign(snapshot.design) }))
+    if (!current && sanitized.length) {
+      storage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(sanitized))
+    }
+    storage.removeItem?.(LEGACY_SNAPSHOT_STORAGE_KEY)
+    return sanitized
   } catch { return [] }
 }
 
 export function saveSnapshot(storage: DesignStorage, snapshot: DesignSnapshot) {
-  const snapshots = [snapshot, ...loadSnapshots(storage).filter((item) => item.id !== snapshot.id)].slice(0, MAX_SNAPSHOTS)
+  const safeSnapshot = { ...snapshot, design: sanitizeDesign(snapshot.design) }
+  const snapshots = [safeSnapshot, ...loadSnapshots(storage).filter((item) => item.id !== snapshot.id)].slice(0, MAX_SNAPSHOTS)
   storage.setItem(SNAPSHOT_STORAGE_KEY, JSON.stringify(snapshots))
+}
+
+export function saveCurrentDesign(storage: DesignStorage, design: NetworkDesign) {
+  storage.setItem(CURRENT_DESIGN_STORAGE_KEY, JSON.stringify(sanitizeDesign(design)))
 }

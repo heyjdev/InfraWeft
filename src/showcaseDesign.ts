@@ -2,8 +2,120 @@ import { ASSOCIATION_LABELS, type EdgeKind, type NetworkDesign, type NetworkEdge
 
 export type ShowcaseSeed = string | number
 export type ShowcaseDesignResult = { design: NetworkDesign; seed: string }
+export type ShowcaseSelection = Record<ResourceKind, number>
+export type ShowcaseSelectionInput = Partial<Record<ResourceKind, number>>
 
-const DEFAULT_SHOWCASE_SEED = 'azure-network-studio'
+export const DEFAULT_SHOWCASE_SELECTION: ShowcaseSelection = {
+  vnet: 3, subnet: 6, appGateway: 1, natGateway: 1, firewall: 1, vpnGateway: 1,
+  loadBalancer: 1, privateEndpoint: 1, frontDoor: 1, publicIp: 3,
+  networkSecurityGroup: 1, routeTable: 1,
+}
+
+export type ShowcaseComplexity = 'small' | 'medium' | 'absurd'
+export type ShowcasePreset = { id: string; label: string; description: string; selection: ShowcaseSelection }
+const emptySelection = (): ShowcaseSelection => Object.fromEntries((Object.keys(DEFAULT_SHOWCASE_SELECTION) as ResourceKind[]).map((kind) => [kind, 0])) as ShowcaseSelection
+const presetSelection = (selection: ShowcaseSelectionInput): ShowcaseSelection => ({ ...emptySelection(), ...selection })
+
+export const SHOWCASE_PRESETS: ShowcasePreset[] = [
+  { id: 'minimal-hub-spoke', label: 'Minimal hub-and-spoke', description: 'Three VNets with baseline subnet routing and security.', selection: presetSelection({ vnet: 3, subnet: 3, networkSecurityGroup: 1, routeTable: 1 }) },
+  { id: 'secure-egress', label: 'Secure egress', description: 'Firewall, NAT, routes, and subnet security for controlled outbound traffic.', selection: presetSelection({ vnet: 2, firewall: 1, natGateway: 1, networkSecurityGroup: 1, routeTable: 1 }) },
+  { id: 'private-application', label: 'Private application', description: 'Front Door and Application Gateway over private application services.', selection: presetSelection({ vnet: 2, appGateway: 1, loadBalancer: 1, privateEndpoint: 2, frontDoor: 1, networkSecurityGroup: 1 }) },
+  { id: 'hybrid-vpn', label: 'Hybrid VPN', description: 'VPN gateway, firewall, routes, and security for hybrid connectivity.', selection: presetSelection({ vnet: 2, vpnGateway: 1, firewall: 1, networkSecurityGroup: 1, routeTable: 1 }) },
+  { id: 'full-showcase', label: 'Full showcase', description: 'Every modeled resource type using the default balanced quantities.', selection: { ...DEFAULT_SHOWCASE_SELECTION } },
+]
+
+export function randomizeShowcaseSelection(input: ShowcaseSelectionInput, complexity: ShowcaseComplexity, random: () => number = Math.random): ShowcaseSelection {
+  const ranges: Record<ShowcaseComplexity, readonly [number, number]> = { small: [1, 2], medium: [1, 5], absurd: [5, 20] }
+  const [minimum, maximum] = ranges[complexity]
+  return Object.fromEntries((Object.keys(DEFAULT_SHOWCASE_SELECTION) as ResourceKind[]).map((kind) => {
+    if (boundedCount(input[kind]) === 0) return [kind, 0]
+    const roll = Math.max(0, Math.min(0.999999999, Number(random()) || 0))
+    return [kind, minimum + Math.floor(roll * (maximum - minimum + 1))]
+  })) as ShowcaseSelection
+}
+
+const SHOWCASE_RESOURCE_KINDS = Object.keys(DEFAULT_SHOWCASE_SELECTION) as ResourceKind[]
+const boundedCount = (value: unknown) => Math.max(0, Math.min(20, Number.isFinite(Number(value)) ? Math.floor(Number(value)) : 0))
+
+export type ShowcaseLayoutMode = 'standard' | 'compact'
+export type ShowcaseLayoutProfile = {
+  mode: ShowcaseLayoutMode
+  columnGap: number
+  rowGap: number
+  bandGap: number
+  maxColumns: number
+  warning?: string
+}
+
+/** Keeps large canvases bounded while preserving enough room for 222px-wide nodes. */
+export function getShowcaseLayoutProfile(resourceCount: number): ShowcaseLayoutProfile {
+  const count = Math.max(0, Math.floor(resourceCount))
+  if (count > 50) return {
+    mode: 'compact', columnGap: 250, rowGap: 92, bandGap: 96, maxColumns: 8,
+    warning: `${count} resources will use compact layout with tighter spacing and wrapped rows.`,
+  }
+  if (count > 24) return { mode: 'standard', columnGap: 285, rowGap: 108, bandGap: 110, maxColumns: 7 }
+  return { mode: 'standard', columnGap: 320, rowGap: 128, bandGap: 128, maxColumns: 6 }
+}
+
+export type ShowcaseRequirement = { minimum: number; reasons: string[] }
+export type ShowcaseRequirements = Record<ResourceKind, ShowcaseRequirement>
+type DependencyRule = {
+  source: ResourceKind
+  target: ResourceKind
+  bucket: string
+  combine: 'sum' | 'max'
+  amount: (count: number) => number
+  reason: (count: number) => string
+}
+
+/** AzureRM 4.81.0 golden-path dependencies used by the showcase planner. */
+export const SHOWCASE_DEPENDENCY_RULES: DependencyRule[] = [
+  { source: 'subnet', target: 'vnet', bucket: 'network-boundary', combine: 'max', amount: () => 1, reason: () => 'Subnets require a parent virtual network.' },
+  { source: 'appGateway', target: 'vnet', bucket: 'network-boundary', combine: 'max', amount: () => 1, reason: () => 'Application Gateway requires a virtual network for its gateway subnet.' },
+  { source: 'appGateway', target: 'subnet', bucket: 'application-gateway', combine: 'max', amount: () => 1, reason: (count) => `${count} Application Gateway${count === 1 ? ' requires' : 's share'} one dedicated gateway subnet.` },
+  { source: 'firewall', target: 'vnet', bucket: 'network-boundary', combine: 'max', amount: (count) => count, reason: (count) => `${count} Azure Firewall${count === 1 ? ' requires' : 's require'} ${count} virtual network ${count === 1 ? 'boundary' : 'boundaries'}.` },
+  { source: 'firewall', target: 'subnet', bucket: 'azure-firewall', combine: 'sum', amount: (count) => count, reason: (count) => `${count} Azure Firewall${count === 1 ? ' requires' : 's require'} ${count} dedicated AzureFirewallSubnet /26 subnet${count === 1 ? '' : 's'}.` },
+  { source: 'firewall', target: 'publicIp', bucket: 'dedicated-public-ip', combine: 'sum', amount: (count) => count, reason: (count) => `${count} VNet Azure Firewall${count === 1 ? ' requires' : 's require'} ${count} dedicated Static Standard Public IP${count === 1 ? '' : 's'}.` },
+  { source: 'vpnGateway', target: 'vnet', bucket: 'network-boundary', combine: 'max', amount: (count) => count, reason: (count) => `${count} VPN Gateway${count === 1 ? ' requires' : 's require'} ${count} virtual network ${count === 1 ? 'boundary' : 'boundaries'} because each VNet has one GatewaySubnet.` },
+  { source: 'vpnGateway', target: 'subnet', bucket: 'vpn-gateway', combine: 'sum', amount: (count) => count, reason: (count) => `${count} VPN Gateway${count === 1 ? ' requires' : 's require'} ${count} exactly named GatewaySubnet subnet${count === 1 ? '' : 's'}.` },
+  { source: 'vpnGateway', target: 'publicIp', bucket: 'dedicated-public-ip', combine: 'sum', amount: (count) => count, reason: (count) => `${count} active-standby VPN Gateway${count === 1 ? ' requires' : 's require'} ${count} dedicated Public IP${count === 1 ? '' : 's'}.` },
+  { source: 'privateEndpoint', target: 'vnet', bucket: 'network-boundary', combine: 'max', amount: () => 1, reason: () => 'Private Endpoints require a subnet in a virtual network.' },
+  { source: 'privateEndpoint', target: 'subnet', bucket: 'private-endpoint', combine: 'max', amount: () => 1, reason: (count) => `${count} Private Endpoint${count === 1 ? ' receives' : 's share'} one isolated endpoint subnet in the showcase.` },
+  ...(['natGateway', 'loadBalancer', 'networkSecurityGroup', 'routeTable'] as ResourceKind[]).map((source): DependencyRule => ({ source, target: 'vnet', bucket: 'network-boundary', combine: 'max', amount: () => 1, reason: () => `${({ natGateway: 'NAT Gateway', loadBalancer: 'Load Balancer', networkSecurityGroup: 'Network Security Group', routeTable: 'Route table' } as Partial<Record<ResourceKind, string>>)[source]} requires a subnet in a virtual network.` })),
+  ...(['natGateway', 'loadBalancer', 'networkSecurityGroup', 'routeTable'] as ResourceKind[]).map((source): DependencyRule => ({ source, target: 'subnet', bucket: 'shared-services', combine: 'max', amount: () => 1, reason: () => 'Selected subnet-associated services share one general-purpose subnet.' })),
+  { source: 'natGateway', target: 'publicIp', bucket: 'dedicated-public-ip', combine: 'sum', amount: (count) => count, reason: (count) => `${count} NAT Gateway${count === 1 ? ' requires' : 's require'} ${count} dedicated Public IP association${count === 1 ? '' : 's'}.` },
+]
+
+export function getShowcaseRequirements(input: ShowcaseSelectionInput): ShowcaseRequirements {
+  const selected = Object.fromEntries(SHOWCASE_RESOURCE_KINDS.map((kind) => [kind, boundedCount(input[kind])])) as ShowcaseSelection
+  const requirements = Object.fromEntries(SHOWCASE_RESOURCE_KINDS.map((kind) => [kind, { minimum: 0, reasons: [] as string[] }])) as unknown as ShowcaseRequirements
+  const buckets = new Map<ResourceKind, Map<string, number>>()
+  for (const rule of SHOWCASE_DEPENDENCY_RULES) {
+    const count = selected[rule.source]
+    if (count === 0) continue
+    const amount = rule.amount(count)
+    const targetBuckets = buckets.get(rule.target) ?? new Map<string, number>()
+    const current = targetBuckets.get(rule.bucket) ?? 0
+    targetBuckets.set(rule.bucket, rule.combine === 'sum' ? current + amount : Math.max(current, amount))
+    buckets.set(rule.target, targetBuckets)
+    if (!requirements[rule.target].reasons.includes(rule.reason(count))) requirements[rule.target].reasons.push(rule.reason(count))
+  }
+  for (const kind of SHOWCASE_RESOURCE_KINDS) requirements[kind].minimum = [...(buckets.get(kind)?.values() ?? [])].reduce((sum, value) => sum + value, 0)
+  return requirements
+}
+
+export function getShowcaseMinimums(input: ShowcaseSelectionInput): ShowcaseSelection {
+  const requirements = getShowcaseRequirements(input)
+  return Object.fromEntries(SHOWCASE_RESOURCE_KINDS.map((kind) => [kind, requirements[kind].minimum])) as ShowcaseSelection
+}
+
+export function normalizeShowcaseSelection(input: ShowcaseSelectionInput): ShowcaseSelection {
+  const minimums = getShowcaseMinimums(input)
+  return Object.fromEntries(SHOWCASE_RESOURCE_KINDS.map((kind) => [kind, Math.max(boundedCount(input[kind]), minimums[kind])])) as ShowcaseSelection
+}
+
+const DEFAULT_SHOWCASE_SEED = 'infraweft'
 const regions = ['eastus', 'eastus2', 'westus2', 'centralus', 'southcentralus', 'westeurope'] as const
 const adjectives = ['arc', 'beacon', 'cobalt', 'delta', 'ember', 'fathom', 'harbor', 'indigo'] as const
 
@@ -43,7 +155,7 @@ const azureReference = (path: string) => `/subscriptions/{subscription-id}/resou
  * Builds a deterministic, local-only reference topology. Export support remains format-specific;
  * external Azure dependencies are conspicuous placeholders rather than invented resources.
  */
-export function createShowcaseDesign(inputSeed?: ShowcaseSeed): ShowcaseDesignResult {
+export function createShowcaseDesign(inputSeed?: ShowcaseSeed, inputSelection?: ShowcaseSelectionInput): ShowcaseDesignResult {
   const seed = String(inputSeed ?? DEFAULT_SHOWCASE_SEED)
   const hash = seedHash(seed)
   const random = seededRandom(hash)
@@ -146,7 +258,7 @@ export function createShowcaseDesign(inputSeed?: ShowcaseSeed): ShowcaseDesignRe
       label: name('vpngw'), gatewayType: 'Vpn', type: 'Vpn', vpn_type: 'RouteBased', sku: 'VpnGw2AZ', generation: 'Generation2', activeActive: false, active_active: false,
       private_ip_address_enabled: false, bgp_enabled: true, bgp_settings: { asn: 65515, peer_weight: 0 },
       ip_configuration: [{ private_ip_address_allocation: 'Dynamic', subnet_id: resourceReference(ids.gatewaySubnet), public_ip_address_id: resourceReference(ids.vpnPublicIp) }],
-      vpn_client_configuration: { address_space: [`172.${16 + (hash % 8)}.0.0/24`], vpn_client_protocols: ['OpenVPN'], vpn_auth_types: ['Radius'], radius_server_address: '10.0.0.4', radius_server_secret: 'secret-reference://key-vault/vpn-radius-shared-secret' },
+      vpn_client_configuration: { address_space: [`172.${16 + (hash % 8)}.0.0/24`], vpn_client_protocols: ['OpenVPN'], vpn_auth_types: ['Radius'], radius_server_address: '10.0.0.4', radius_secret_required: true },
     }),
     node(ids.loadBalancer, 'loadBalancer', SHOWCASE_LAYOUT.internal.loadBalancer, SHOWCASE_LAYOUT.layers.internal, {
       label: name('lb-internal'), sku: 'Standard', sku_tier: 'Regional', frontendType: 'Private',
@@ -183,5 +295,161 @@ export function createShowcaseDesign(inputSeed?: ShowcaseSeed): ShowcaseDesignRe
     edge('attach-private-endpoint', ids.privateEndpointSubnet, ids.privateEndpoint, 'attachment'), edge('attach-front-door', ids.frontDoor, ids.appGateway, 'attachment'),
   ]
 
-  return { seed, design: { name: `Random showcase · ${seed}`, nodes, edges } }
+  const baseDesign = { name: `Random showcase · ${seed}`, nodes, edges }
+  if (!inputSelection) return { seed, design: baseDesign }
+
+  const selection = normalizeShowcaseSelection(inputSelection)
+  const byKind = new Map<ResourceKind, NetworkNode[]>()
+  for (const kind of SHOWCASE_RESOURCE_KINDS) {
+    const templates = nodes.filter((candidate) => candidate.data.kind === kind)
+    const selectedNodes = Array.from({ length: selection[kind] }, (_, index) => {
+      const template = templates[index % templates.length]
+      const clone = structuredClone(template)
+      if (index >= templates.length) {
+        clone.id = `${template.id}-copy-${index + 1}`
+        clone.data.label = `${template.data.label}-${index + 1}`
+      }
+      return clone
+    })
+    byKind.set(kind, selectedNodes)
+  }
+
+  const selectedNodes = SHOWCASE_RESOURCE_KINDS.flatMap((kind) => byKind.get(kind) ?? [])
+  const vnets = byKind.get('vnet') ?? []
+  const subnets = byKind.get('subnet') ?? []
+  const publicIps = byKind.get('publicIp') ?? []
+  const pick = (items: NetworkNode[], index: number) => items.length ? items[index % items.length] : undefined
+
+  type SubnetRole = { kind: 'appGateway' | 'firewall' | 'vpnGateway' | 'privateEndpoint' | 'shared' | 'general'; ownerIndex: number }
+  const subnetRoles: SubnetRole[] = [
+    ...Array.from({ length: selection.appGateway > 0 ? 1 : 0 }, (_, ownerIndex): SubnetRole => ({ kind: 'appGateway', ownerIndex })),
+    ...Array.from({ length: selection.firewall }, (_, ownerIndex): SubnetRole => ({ kind: 'firewall', ownerIndex })),
+    ...Array.from({ length: selection.vpnGateway }, (_, ownerIndex): SubnetRole => ({ kind: 'vpnGateway', ownerIndex })),
+    ...Array.from({ length: selection.privateEndpoint > 0 ? 1 : 0 }, (_, ownerIndex): SubnetRole => ({ kind: 'privateEndpoint', ownerIndex })),
+  ]
+  if (['natGateway', 'loadBalancer', 'networkSecurityGroup', 'routeTable'].some((kind) => selection[kind as ResourceKind] > 0)) subnetRoles.push({ kind: 'shared', ownerIndex: 0 })
+  while (subnetRoles.length < selection.subnet) subnetRoles.push({ kind: 'general', ownerIndex: subnetRoles.length })
+
+  vnets.forEach((vnet, index) => {
+    const cidr = `10.${baseOctet + index}.0.0/16`
+    vnet.data.addressSpace = cidr
+    vnet.data.addressSpaces = [cidr]
+  })
+  const subnetOrdinals = new Map<string, number>()
+  subnets.forEach((subnet, index) => {
+    const role = subnetRoles[index]
+    const vnetIndex = role.kind === 'firewall' || role.kind === 'vpnGateway' ? role.ownerIndex : index
+    const parent = pick(vnets, vnetIndex)!
+    const ordinal = (subnetOrdinals.get(parent.id) ?? 0) + 1
+    subnetOrdinals.set(parent.id, ordinal)
+    const parentCidr = String(parent.data.addressSpace).split('.')
+    const prefix = role.kind === 'firewall' ? 26 : 24
+    const cidr = `${parentCidr[0]}.${parentCidr[1]}.${ordinal}.0/${prefix}`
+    const roleLabels: Record<SubnetRole['kind'], string> = {
+      appGateway: `snet-appgw-${role.ownerIndex + 1}`,
+      firewall: 'AzureFirewallSubnet',
+      vpnGateway: 'GatewaySubnet',
+      privateEndpoint: `snet-private-endpoints-${role.ownerIndex + 1}`,
+      shared: 'snet-shared-services',
+      general: `snet-general-${role.ownerIndex + 1}`,
+    }
+    subnet.data.label = roleLabels[role.kind]
+    subnet.data.parentVnetId = parent.id
+    subnet.data.addressSpace = cidr
+    subnet.data.addressSpaces = [cidr]
+    if (role.kind === 'privateEndpoint') subnet.data.private_endpoint_network_policies = 'Disabled'
+  })
+
+  const subnetsFor = (kind: SubnetRole['kind']) => subnets.filter((_, index) => subnetRoles[index]?.kind === kind)
+  const appGatewaySubnets = subnetsFor('appGateway')
+  const firewallSubnets = subnetsFor('firewall')
+  const vpnGatewaySubnets = subnetsFor('vpnGateway')
+  const privateEndpointSubnets = subnetsFor('privateEndpoint')
+  const sharedSubnet = subnetsFor('shared')[0] ?? subnets[0]
+  const natPublicIps = publicIps.slice(0, selection.natGateway)
+  const firewallPublicIps = publicIps.slice(selection.natGateway, selection.natGateway + selection.firewall)
+  const vpnPublicIps = publicIps.slice(selection.natGateway + selection.firewall, selection.natGateway + selection.firewall + selection.vpnGateway)
+  const reference = (target?: NetworkNode) => target ? resourceReference(target.id) : undefined
+
+  ;(byKind.get('appGateway') ?? []).forEach((item, index) => {
+    const subnet = pick(appGatewaySubnets, index)!
+    const data = item.data as Record<string, unknown>
+    data.gateway_ip_configuration = [{ ...(Array.isArray(data.gateway_ip_configuration) ? data.gateway_ip_configuration[0] as object : {}), name: `gateway-ip-${index + 1}`, subnet_id: subnet.id }]
+    const frontends = Array.isArray(data.frontend_ip_configuration) ? data.frontend_ip_configuration as Array<Record<string, unknown>> : []
+    data.frontend_ip_configuration = frontends.map((frontend) => ({ ...frontend, subnet_id: subnet.id }))
+  })
+  ;(byKind.get('firewall') ?? []).forEach((item, index) => {
+    const data = item.data as Record<string, unknown>
+    data.ip_configuration = [{ name: `firewall-ip-${index + 1}`, subnet_id: firewallSubnets[index].id, public_ip_address_id: reference(firewallPublicIps[index]) }]
+  })
+  ;(byKind.get('vpnGateway') ?? []).forEach((item, index) => {
+    const data = item.data as Record<string, unknown>
+    data.ip_configuration = [{ name: `gateway-ip-${index + 1}`, private_ip_address_allocation: 'Dynamic', subnet_id: reference(vpnGatewaySubnets[index]), public_ip_address_id: reference(vpnPublicIps[index]) }]
+  })
+  ;(byKind.get('privateEndpoint') ?? []).forEach((item, index) => { item.data.subnet_id = pick(privateEndpointSubnets, index)!.id })
+  ;(byKind.get('loadBalancer') ?? []).forEach((item) => {
+    const data = item.data as Record<string, unknown>
+    const frontends = Array.isArray(data.frontend_ip_configuration) ? data.frontend_ip_configuration as Array<Record<string, unknown>> : []
+    data.frontend_ip_configuration = frontends.map((frontend) => ({ ...frontend, subnet_id: sharedSubnet.id }))
+  })
+
+  let edgeOrdinal = 0
+  const customEdges: NetworkEdge[] = []
+  const connect = (source: NetworkNode | undefined, target: NetworkNode | undefined, kind: EdgeKind) => {
+    if (!source || !target) return
+    customEdges.push(edge(`custom-${++edgeOrdinal}`, source.id, target.id, kind))
+  }
+  vnets.slice(1).forEach((vnet) => connect(vnets[0], vnet, 'peering'))
+  subnets.forEach((subnet) => connect(vnets.find((vnet) => vnet.id === subnet.data.parentVnetId), subnet, 'attachment'))
+  ;(byKind.get('appGateway') ?? []).forEach((item, index) => connect(pick(appGatewaySubnets, index), item, 'attachment'))
+  ;(byKind.get('firewall') ?? []).forEach((item, index) => connect(firewallSubnets[index], item, 'attachment'))
+  ;(byKind.get('vpnGateway') ?? []).forEach((item, index) => connect(vpnGatewaySubnets[index], item, 'attachment'))
+  ;(byKind.get('privateEndpoint') ?? []).forEach((item, index) => connect(pick(privateEndpointSubnets, index), item, 'attachment'))
+  ;(byKind.get('loadBalancer') ?? []).forEach((item) => connect(sharedSubnet, item, 'attachment'))
+  ;(byKind.get('networkSecurityGroup') ?? []).forEach((item) => connect(sharedSubnet, item, 'subnetNetworkSecurityGroup'))
+  ;(byKind.get('routeTable') ?? []).forEach((item) => connect(sharedSubnet, item, 'subnetRouteTable'))
+  ;(byKind.get('natGateway') ?? []).forEach((item, index) => { connect(sharedSubnet, item, 'subnetNatGateway'); connect(item, natPublicIps[index], 'natGatewayPublicIp') })
+  ;(byKind.get('frontDoor') ?? []).forEach((item, index) => connect(item, pick(byKind.get('appGateway') ?? [], index), 'attachment'))
+
+  const nodeById = new Map(selectedNodes.map((item) => [item.id, item]))
+  const vnetOrder = new Map(vnets.map((item, index) => [item.id, index]))
+  const parentVnetByNode = new Map<string, string>()
+  for (const subnet of subnets) parentVnetByNode.set(subnet.id, String(subnet.data.parentVnetId))
+  let discoveredParent = true
+  while (discoveredParent) {
+    discoveredParent = false
+    for (const candidate of customEdges.filter((item) => item.data?.kind !== 'peering')) {
+      const sourceParent = nodeById.get(candidate.source)?.data.kind === 'vnet' ? candidate.source : parentVnetByNode.get(candidate.source)
+      const targetParent = nodeById.get(candidate.target)?.data.kind === 'vnet' ? candidate.target : parentVnetByNode.get(candidate.target)
+      if (sourceParent && !parentVnetByNode.has(candidate.target)) { parentVnetByNode.set(candidate.target, sourceParent); discoveredParent = true }
+      if (targetParent && !parentVnetByNode.has(candidate.source)) { parentVnetByNode.set(candidate.source, targetParent); discoveredParent = true }
+    }
+  }
+
+  const layoutProfile = getShowcaseLayoutProfile(selectedNodes.length)
+  const layoutBands: ResourceKind[][] = [
+    ['frontDoor', 'publicIp'],
+    ['vnet'],
+    ['subnet'],
+    ['appGateway', 'natGateway', 'firewall', 'vpnGateway', 'loadBalancer', 'privateEndpoint', 'networkSecurityGroup', 'routeTable'],
+  ]
+  const kindOrder = new Map(SHOWCASE_RESOURCE_KINDS.map((kind, index) => [kind, index]))
+  const clusterOrder = (item: NetworkNode) => vnetOrder.get(parentVnetByNode.get(item.id) ?? item.id) ?? Number.MAX_SAFE_INTEGER
+  let bandY = 40
+  for (const kinds of layoutBands) {
+    const items = selectedNodes.filter((item) => kinds.includes(item.data.kind)).sort((left, right) =>
+      clusterOrder(left) - clusterOrder(right)
+      || (kindOrder.get(left.data.kind) ?? 0) - (kindOrder.get(right.data.kind) ?? 0)
+      || left.id.localeCompare(right.id),
+    )
+    if (!items.length) continue
+    const naturalColumns = Math.max(1, Math.ceil(Math.sqrt(items.length * 1.6)))
+    const columns = Math.min(layoutProfile.maxColumns, naturalColumns)
+    items.forEach((item, index) => {
+      item.position = { x: 100 + (index % columns) * layoutProfile.columnGap, y: bandY + Math.floor(index / columns) * layoutProfile.rowGap }
+    })
+    bandY += Math.ceil(items.length / columns) * layoutProfile.rowGap + layoutProfile.bandGap
+  }
+
+  return { seed, design: { name: `${baseDesign.name} · custom selection`, nodes: selectedNodes, edges: customEdges } }
 }

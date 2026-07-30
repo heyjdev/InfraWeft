@@ -1,0 +1,10 @@
+InfraWeft
+Copyright 2026 the project contributors
+
+Licensed under the Apache License, Version 2.0.
+
+Licenses for dependencies bundled into the browser application are provided in `dist/THIRD_PARTY_LICENSES.md` in release packages.
+
+Microsoft, Azure, Azure CLI, and Bicep are trademarks of the Microsoft group of companies. This project is independent and is not affiliated with, sponsored by, or endorsed by Microsoft.
+
+Terraform is a trademark of HashiCorp, Inc. This project is independent and is not affiliated with, sponsored by, or endorsed by HashiCorp.

@@ -10,6 +10,114 @@ export type ValidationStep = { name: string; command: string; args: string[] }
 export type ValidationPlan = { fileName: string; steps: ValidationStep[] }
 export type ValidationResult = { name: string; status: 'passed' | 'failed'; output: string }
 const MAX_CODE_BYTES = 500_000
+const TERRAFORM_PROVIDER_ERROR = 'Terraform validation allows only hashicorp/azurerm 4.81.0.'
+
+function stripTerraformComments(code: string) {
+  let result = ''
+  let index = 0
+  let quoted = false
+  while (index < code.length) {
+    const current = code[index]
+    const next = code[index + 1]
+    if (quoted) {
+      result += current
+      if (current === '\\' && next) {
+        result += next
+        index += 2
+        continue
+      }
+      if (current === '"') quoted = false
+      index += 1
+      continue
+    }
+    if (current === '"') {
+      quoted = true
+      result += current
+      index += 1
+      continue
+    }
+    if (current === '#' || (current === '/' && next === '/')) {
+      while (index < code.length && code[index] !== '\n') index += 1
+      result += '\n'
+      index += 1
+      continue
+    }
+    if (current === '/' && next === '*') {
+      index += 2
+      while (index < code.length && !(code[index] === '*' && code[index + 1] === '/')) index += 1
+      index += 2
+      result += ' '
+      continue
+    }
+    result += current
+    index += 1
+  }
+  return result
+}
+
+function terraformBlocks(code: string, name: string) {
+  const blocks: string[] = []
+  let cursor = 0
+  let outerDepth = 0
+  while (cursor < code.length) {
+    if (code[cursor] === '"') {
+      cursor += 1
+      while (cursor < code.length && code[cursor] !== '"') {
+        if (code[cursor] === '\\') cursor += 1
+        cursor += 1
+      }
+      cursor += 1
+      continue
+    }
+    if (code[cursor] === '{') {
+      outerDepth += 1
+      cursor += 1
+      continue
+    }
+    if (code[cursor] === '}') {
+      outerDepth = Math.max(0, outerDepth - 1)
+      cursor += 1
+      continue
+    }
+    const previous = code[cursor - 1]
+    const afterName = code[cursor + name.length]
+    if (outerDepth === 0 && code.startsWith(name, cursor) && !/[\w-]/.test(previous ?? '') && !/[\w-]/.test(afterName ?? '')) {
+      let openingBrace = cursor + name.length
+      while (/\s/.test(code[openingBrace] ?? '')) openingBrace += 1
+      if (code[openingBrace] === '{') {
+        let depth = 1
+        let quoted = false
+        let index = openingBrace + 1
+        for (; index < code.length && depth; index += 1) {
+          const current = code[index]
+          if (quoted) {
+            if (current === '\\') index += 1
+            else if (current === '"') quoted = false
+          } else if (current === '"') quoted = true
+          else if (current === '{') depth += 1
+          else if (current === '}') depth -= 1
+        }
+        if (depth) return []
+        blocks.push(code.slice(openingBrace + 1, index - 1))
+        cursor = index
+        continue
+      }
+    }
+    cursor += 1
+  }
+  return blocks
+}
+
+function terraformPolicyError(code: string) {
+  const uncommented = stripTerraformComments(code)
+  if (/\b(?:module|provisioner)\s+"/m.test(uncommented)) return 'Terraform modules and provisioners are not allowed in local validation.'
+  if (/<<-?[A-Za-z_]/.test(uncommented)) return TERRAFORM_PROVIDER_ERROR
+  const terraformConfig = terraformBlocks(uncommented, 'terraform')
+  if (terraformConfig.length !== 1 || terraformConfig[0].replace(/[\s,]+/g, '') !== 'required_providers{azurerm={source="hashicorp/azurerm"version="4.81.0"}}') return TERRAFORM_PROVIDER_ERROR
+  const providers = [...uncommented.matchAll(/\bprovider\s+"([^"]+)"/g)].map((match) => match[1])
+  if (providers.some((provider) => provider !== 'azurerm')) return TERRAFORM_PROVIDER_ERROR
+  return undefined
+}
 
 export function validateRequest(value: unknown): { ok: true; format: ValidationFormat; code: string } | { ok: false; error: string } {
   if (!value || typeof value !== 'object') return { ok: false, error: 'A JSON validation request is required.' }
@@ -18,6 +126,10 @@ export function validateRequest(value: unknown): { ok: true; format: ValidationF
   if (typeof code !== 'string' || !code.length) return { ok: false, error: 'Generated code is required.' }
   if (Buffer.byteLength(code, 'utf8') > MAX_CODE_BYTES) return { ok: false, error: 'Generated code exceeds the 500 KB validation limit.' }
   if (code.includes('\0')) return { ok: false, error: 'Generated code contains a null byte.' }
+  if (format === 'terraform') {
+    const error = terraformPolicyError(code)
+    if (error) return { ok: false, error }
+  }
   return { ok: true, format: format as ValidationFormat, code }
 }
 
@@ -26,7 +138,7 @@ export function validationPlan(format: ValidationFormat, directory: string): Val
     fileName: 'main.tf',
     steps: [
       { name: 'Terraform format', command: 'terraform', args: [`-chdir=${directory}`, 'fmt', '-check', '-no-color', 'main.tf'] },
-      { name: 'Terraform initialize', command: 'terraform', args: [`-chdir=${directory}`, 'init', '-backend=false', '-input=false', '-no-color'] },
+      { name: 'Terraform initialize', command: 'terraform', args: [`-chdir=${directory}`, 'init', '-backend=false', '-get=false', '-input=false', '-no-color'] },
       { name: 'Terraform validate', command: 'terraform', args: [`-chdir=${directory}`, 'validate', '-no-color'] },
     ],
   }
@@ -39,18 +151,36 @@ export function validationPlan(format: ValidationFormat, directory: string): Val
 
 const publicOutput = (value: string, directory: string) => value.replaceAll(directory, '<temporary-directory>').slice(0, 12_000).trim()
 
+function validationEnvironment(format: ValidationFormat, directory: string) {
+  const environment: NodeJS.ProcessEnv = {
+    TF_IN_AUTOMATION: '1',
+    AZURE_CORE_COLLECT_TELEMETRY: '0',
+  }
+  for (const key of ['PATH', 'Path', 'PATHEXT', 'SystemRoot', 'ComSpec', 'TEMP', 'TMP', 'TMPDIR']) if (process.env[key]) environment[key] = process.env[key]
+  if (format === 'terraform') {
+    environment.HOME = directory
+    environment.USERPROFILE = directory
+    environment.TF_CLI_CONFIG_FILE = join(directory, 'terraform.rc')
+  } else {
+    for (const key of ['HOME', 'USERPROFILE', 'AZURE_CONFIG_DIR']) if (process.env[key]) environment[key] = process.env[key]
+  }
+  return environment
+}
+
 export async function validateGeneratedCode(format: ValidationFormat, code: string): Promise<{ ok: boolean; results: ValidationResult[] }> {
-  const directory = await mkdtemp(join(tmpdir(), 'azure-network-studio-validation-'))
+  const directory = await mkdtemp(join(tmpdir(), 'infraweft-validation-'))
   const plan = validationPlan(format, directory)
   const results: ValidationResult[] = []
   try {
     await writeFile(join(directory, plan.fileName), code, { encoding: 'utf8', mode: 0o600 })
+    if (format === 'terraform') await writeFile(join(directory, 'terraform.rc'), 'provider_installation {\n  direct {\n    include = ["registry.terraform.io/hashicorp/azurerm"]\n  }\n}\n', { encoding: 'utf8', mode: 0o600 })
     for (const step of plan.steps) {
       try {
         const { stdout, stderr } = await exec(step.command, step.args, {
           timeout: format === 'terraform' ? 180_000 : 60_000,
           maxBuffer: 2 * 1024 * 1024,
-          env: { ...process.env, AZURE_CORE_COLLECT_TELEMETRY: '0', TF_IN_AUTOMATION: '1' },
+          cwd: directory,
+          env: validationEnvironment(format, directory),
         })
         results.push({ name: step.name, status: 'passed', output: publicOutput(`${stdout}${stderr}`, directory) || 'Passed.' })
       } catch (error) {

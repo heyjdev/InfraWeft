@@ -1,0 +1,66 @@
+name: Bug report
+description: Report reproducible incorrect behavior in InfraWeft.
+title: "[Bug]: "
+labels: [bug, needs-triage]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for reporting a bug. Remove credentials, subscription IDs, resource IDs, and private topology from all examples.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Reproduction steps
+      placeholder: |
+        1. Start InfraWeft with ...
+        2. Add ...
+        3. Select ...
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - Canvas and properties
+        - Azure import
+        - Terraform generation or validation
+        - Bicep generation or validation
+        - Azure CLI generation or validation
+        - Packaging and local startup
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: InfraWeft version or commit
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Operating system and Node.js version
+      placeholder: Ubuntu 24.04, Node.js 22.12
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized logs or screenshots
+      description: Never include credentials, tokens, subscription IDs, resource IDs, or private topology.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Safety checks
+      options:
+        - label: I removed secrets and private infrastructure metadata.
+          required: true
+        - label: This is not a security vulnerability.
+          required: true

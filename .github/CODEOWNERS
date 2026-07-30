@@ -1,0 +1,5 @@
+# Default owner for code, documentation, workflows, and security-sensitive paths.
+* @heyjdev
+/.github/ @heyjdev
+/server/ @heyjdev
+/bin/ @heyjdev

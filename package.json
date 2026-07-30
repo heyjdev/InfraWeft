@@ -1,18 +1,63 @@
 {
-  "name": "azure-network-studio",
-  "private": true,
+  "name": "infraweft",
+  "private": false,
   "version": "0.1.0",
+  "description": "Local-first visual cloud infrastructure designer and deterministic code generator.",
+  "license": "Apache-2.0",
+  "homepage": "https://github.com/heyjdev/InfraWeft#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/heyjdev/InfraWeft.git"
+  },
+  "bugs": {
+    "url": "https://github.com/heyjdev/InfraWeft/issues"
+  },
+  "keywords": [
+    "azure",
+    "bicep",
+    "cloud",
+    "infrastructure-as-code",
+    "local-first",
+    "networking",
+    "terraform",
+    "visual-designer"
+  ],
   "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "bin": {
+    "infraweft": "bin/infraweft.mjs"
+  },
+  "files": [
+    "bin/",
+    "dist/",
+    "dist-server/",
+    "LICENSE",
+    "NOTICE",
+    "PRIVACY.md",
+    "README.md",
+    "SECURITY.md"
+  ],
   "scripts": {
     "dev": "concurrently -k -n API,UI -c cyan,blue \"npm:dev:api\" \"npm:dev:ui\"",
     "dev:ui": "vite",
     "dev:api": "tsx watch server/index.ts",
-    "build": "tsc -b && vite build",
+    "build": "tsc -b && vite build && npm run build:server",
+    "build:server": "esbuild server/index.ts --bundle --platform=node --format=esm --packages=external --outfile=dist-server/index.mjs",
     "lint": "oxlint .",
     "test": "vitest run",
-    "preview": "vite preview"
+    "test:package": "node scripts/package-smoke.mjs",
+    "prepack": "npm run build",
+    "preview": "vite preview",
+    "start": "node bin/infraweft.mjs"
   },
   "dependencies": {
+    "@fontsource-variable/jetbrains-mono": "^5.3.0",
+    "@fontsource-variable/space-grotesk": "^5.3.0",
     "@xyflow/react": "^12.11.2",
     "express": "^5.2.1",
     "lucide-react": "^1.27.0",
@@ -26,6 +71,7 @@
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^6.0.3",
     "concurrently": "^10.0.4",
+    "esbuild": "^0.28.1",
     "oxlint": "^1.71.0",
     "tsx": "^4.23.1",
     "typescript": "~6.0.2",

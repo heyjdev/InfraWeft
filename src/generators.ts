@@ -67,6 +67,31 @@ function attachedParent(node: NetworkNode, nodes: NetworkNode[], edges: NetworkE
   return neighbors.length === 1 ? neighbors[0] : undefined
 }
 
+function effectiveFirewallConfigurations(node: NetworkNode, nodes: NetworkNode[], edges: NetworkEdge[]) {
+  const configurations = records(node.data.ip_configuration).map((item) => ({ ...item }))
+  const related = (kind: NetworkNode['data']['kind'], edgeKinds: string[]) => edges
+    .filter((edge) => edgeKinds.includes(String(edge.data?.kind)) && (edge.source === node.id || edge.target === node.id))
+    .map((edge) => nodes.find((candidate) => candidate.id === (edge.source === node.id ? edge.target : edge.source)))
+    .filter((candidate): candidate is NetworkNode => candidate?.data.kind === kind)
+  const subnets = related('subnet', ['attachment', 'firewallSubnet'])
+  const publicIps = related('publicIp', ['attachment', 'firewallPublicIp'])
+  for (const subnet of subnets) {
+    if (configurations.some((configuration) => referencedNode(configuration.subnet_id, nodes)?.id === subnet.id)) continue
+    const open = configurations.findIndex((configuration) => !configuration.subnet_id)
+    const patch = { subnet_id: `resource-reference://${subnet.id}` }
+    if (open >= 0) configurations[open] = { ...configurations[open], ...patch }
+    else configurations.push({ name: `firewall-ip-${configurations.length + 1}`, ...patch })
+  }
+  for (const publicIp of publicIps) {
+    if (configurations.some((configuration) => referencedNode(configuration.public_ip_address_id, nodes)?.id === publicIp.id)) continue
+    const open = configurations.findIndex((configuration) => !configuration.public_ip_address_id)
+    const patch = { public_ip_address_id: `resource-reference://${publicIp.id}` }
+    if (open >= 0) configurations[open] = { ...configurations[open], ...patch }
+    else configurations.push({ name: `firewall-ip-${configurations.length + 1}`, ...patch })
+  }
+  return configurations
+}
+
 const COMMON_RENDERED_KEYS = new Set(['label', 'kind', 'region', 'resourceGroup', 'subscriptionId', 'imported'])
 const RENDERED_KEYS: Partial<Record<NetworkNode['data']['kind'], Set<string>>> = {
   vnet: new Set(['addressSpace', 'addressSpaces']),
@@ -142,9 +167,15 @@ function configurationProblem(node: NetworkNode, nodes: NetworkNode[], edges: Ne
     const waf = record(node.data.waf_configuration)
     if (waf && waf.rule_set_type !== 'OWASP') return 'Inline Application Gateway WAF configuration supports the OWASP rule set; Microsoft managed rule sets require a modeled WAF Policy.'
   }
-  if (node.data.kind === 'firewall' && scalar(node.data.sku_name ?? node.data.sku, 'AZFW_VNet') === 'AZFW_VNet' && !records(node.data.ip_configuration).length) return 'AZFW_VNet requires at least one IP configuration with its dedicated firewall subnet and Public IP.'
+  if (node.data.kind === 'firewall' && scalar(node.data.sku_name ?? node.data.sku, 'AZFW_VNet') === 'AZFW_VNet') {
+    const configurations = effectiveFirewallConfigurations(node, nodes, edges)
+    if (!configurations.length) return 'AZFW_VNet requires at least one IP configuration with its dedicated firewall subnet and Public IP.'
+    const subnet = referencedNode(configurations[0].subnet_id, nodes)
+    if (!subnet || subnet.data.kind !== 'subnet' || subnet.data.label !== 'AzureFirewallSubnet' || !attachedParent(subnet, nodes, edges)) return 'The primary Azure Firewall IP configuration requires the managed AzureFirewallSubnet and its parent VNet.'
+    if (configurations.some((configuration) => !configuration.public_ip_address_id)) return 'Every Azure Firewall IP configuration requires a Public IP reference.'
+  }
   if (format === 'azureCli' && node.data.kind === 'firewall' && scalar(node.data.sku_name ?? node.data.sku, 'AZFW_VNet') === 'AZFW_VNet') {
-    for (const item of records(node.data.ip_configuration)) {
+    for (const item of effectiveFirewallConfigurations(node, nodes, edges)) {
       const subnet = referencedNode(item.subnet_id, nodes)
       if (!subnet || subnet.data.kind !== 'subnet' || subnet.data.label !== 'AzureFirewallSubnet' || !attachedParent(subnet, nodes, edges)) return 'Azure CLI firewall export requires each VNet IP configuration to reference the managed AzureFirewallSubnet and its parent VNet.'
     }
@@ -155,7 +186,7 @@ function configurationProblem(node: NetworkNode, nodes: NetworkNode[], edges: Ne
   if (node.data.kind === 'vpnGateway') {
     if (!records(node.data.ip_configuration).length) return 'At least one gateway IP configuration is required.'
     const client = record(node.data.vpn_client_configuration)
-    if (client && Boolean(client.radius_server_address) !== Boolean(client.radius_server_secret)) return 'RADIUS server address and secret must be configured together.'
+    if (client && Boolean(client.radius_server_address) !== Boolean(client.radius_secret_required)) return 'RADIUS server address and deployment-time secret must be configured together.'
     if (format === 'azureCli') {
       const configurations = records(node.data.ip_configuration)
       if (scalar(node.data.type ?? node.data.gatewayType, 'Vpn') !== 'Vpn') return 'Azure CLI gateway export currently supports VPN gateways only; ExpressRoute requires a separate command path.'
@@ -370,8 +401,8 @@ function terraformApplicationGateway(node: NetworkNode, nodes: NetworkNode[]) {
   return `resource "azurerm_application_gateway" "${resourceKey(node)}" {\n  name                = ${q(node.data.label)}\n  location            = ${q(node.data.region || 'eastus')}\n  resource_group_name = ${q(node.data.resourceGroup || 'rg-network')}\n  http2_enabled       = ${Boolean(node.data.http2_enabled)}\n  fips_enabled        = ${Boolean(node.data.fips_enabled)}${strings(node.data.zones).length ? `\n  zones               = ${hclList(node.data.zones)}` : ''}\n${nested.filter(Boolean).join('\n')}\n}`
 }
 
-function terraformFirewall(node: NetworkNode, nodes: NetworkNode[]) {
-  const nested = records(node.data.ip_configuration).map((item) => `  ip_configuration {\n    name                 = ${q(String(item.name ?? 'configuration'))}${item.subnet_id ? `\n    subnet_id            = ${terraformId(item.subnet_id, nodes)}` : ''}${item.public_ip_address_id ? `\n    public_ip_address_id = ${terraformId(item.public_ip_address_id, nodes)}` : ''}\n  }`)
+function terraformFirewall(node: NetworkNode, nodes: NetworkNode[], edges: NetworkEdge[]) {
+  const nested = effectiveFirewallConfigurations(node, nodes, edges).map((item) => `  ip_configuration {\n    name                 = ${q(String(item.name ?? 'configuration'))}${item.subnet_id ? `\n    subnet_id            = ${terraformId(item.subnet_id, nodes)}` : ''}${item.public_ip_address_id ? `\n    public_ip_address_id = ${terraformId(item.public_ip_address_id, nodes)}` : ''}\n  }`)
   const management = record(node.data.management_ip_configuration)
   if (management) nested.push(`  management_ip_configuration {\n    name                 = ${q(String(management.name ?? 'management'))}\n    subnet_id            = ${terraformId(management.subnet_id, nodes)}\n    public_ip_address_id = ${terraformId(management.public_ip_address_id, nodes)}\n  }`)
   const hub = record(node.data.virtual_hub)
@@ -380,6 +411,7 @@ function terraformFirewall(node: NetworkNode, nodes: NetworkNode[]) {
 }
 
 function terraformVpnGateway(node: NetworkNode, nodes: NetworkNode[]) {
+  const key = resourceKey(node)
   const nested = records(node.data.ip_configuration).map((item) => `  ip_configuration {\n    name                          = ${q(String(item.name ?? 'vnetGatewayConfig'))}\n    private_ip_address_allocation = ${q(String(item.private_ip_address_allocation ?? 'Dynamic'))}\n    subnet_id                     = ${terraformId(item.subnet_id, nodes)}${item.public_ip_address_id ? `\n    public_ip_address_id          = ${terraformId(item.public_ip_address_id, nodes)}` : ''}\n  }`)
   const bgp = record(node.data.bgp_settings)
   if (bgp) nested.push(`  bgp_settings {${bgp.asn !== undefined ? `\n    asn         = ${Number(bgp.asn)}` : ''}${bgp.peer_weight !== undefined ? `\n    peer_weight = ${Number(bgp.peer_weight)}` : ''}\n  }`)
@@ -389,7 +421,7 @@ function terraformVpnGateway(node: NetworkNode, nodes: NetworkNode[]) {
     ['vpn_client_protocols', strings(client.vpn_client_protocols).length ? hclList(client.vpn_client_protocols) : undefined],
     ['vpn_auth_types', strings(client.vpn_auth_types).length ? hclList(client.vpn_auth_types) : undefined],
     ['radius_server_address', client.radius_server_address ? q(String(client.radius_server_address)) : undefined],
-    ['radius_server_secret', client.radius_server_secret ? q(String(client.radius_server_secret)) : undefined],
+    ['radius_server_secret', client.radius_secret_required ? `var.${key}_radius_server_secret` : undefined],
   ], 4)}\n  }`)
   const top = hclAssignments([
     ['name', q(node.data.label)], ['location', q(node.data.region || 'eastus')], ['resource_group_name', q(node.data.resourceGroup || 'rg-network')],
@@ -400,7 +432,8 @@ function terraformVpnGateway(node: NetworkNode, nodes: NetworkNode[]) {
     ['minimum_scale_unit', node.data.minimum_scale_unit !== undefined ? String(Number(node.data.minimum_scale_unit)) : undefined],
     ['maximum_scale_unit', node.data.maximum_scale_unit !== undefined ? String(Number(node.data.maximum_scale_unit)) : undefined],
   ])
-  return `resource "azurerm_virtual_network_gateway" "${resourceKey(node)}" {\n${top}\n${nested.join('\n')}\n}`
+  const secretVariable = client?.radius_secret_required ? `variable "${key}_radius_server_secret" {\n  description = "RADIUS shared secret for ${cleanComment(node.data.label)}"\n  type        = string\n  sensitive   = true\n}\n\n` : ''
+  return `${secretVariable}resource "azurerm_virtual_network_gateway" "${key}" {\n${top}\n${nested.join('\n')}\n}`
 }
 
 function terraformLoadBalancer(node: NetworkNode, nodes: NetworkNode[]) {
@@ -460,7 +493,7 @@ function terraform(nodes: NetworkNode[], edges: NetworkEdge[], report: ExportRep
       blocks.push(`resource "azurerm_route_table" "${resourceKey(node)}" {\n  name                          = ${q(node.data.label)}\n  location                      = ${q(node.data.region || 'eastus')}\n  resource_group_name           = ${q(node.data.resourceGroup || 'rg-network')}\n  bgp_route_propagation_enabled = ${!node.data.disable_bgp_route_propagation}${routes ? `\n${routes}` : ''}\n}`)
     }
     if (node.data.kind === 'appGateway') blocks.push(terraformApplicationGateway(node, nodes))
-    if (node.data.kind === 'firewall') blocks.push(terraformFirewall(node, nodes))
+    if (node.data.kind === 'firewall') blocks.push(terraformFirewall(node, nodes, edges))
     if (node.data.kind === 'vpnGateway') blocks.push(terraformVpnGateway(node, nodes))
     if (node.data.kind === 'loadBalancer') blocks.push(terraformLoadBalancer(node, nodes))
     if (node.data.kind === 'privateEndpoint') blocks.push(terraformPrivateEndpoint(node, nodes))
@@ -505,9 +538,9 @@ function bicepAppGateway(node: NetworkNode, nodes: NetworkNode[]) {
   return `resource ${key} 'Microsoft.Network/applicationGateways@2024-05-01' = {\n  name: ${bq(node.data.label)}\n  location: ${bq(node.data.region || 'eastus')}${strings(node.data.zones).length ? `\n  zones: [${strings(node.data.zones).map(bq).join(', ')}]` : ''}\n  properties: {\n    sku: { name: ${bq(String(sku.name))}, tier: ${bq(String(sku.tier))}${autoscale ? '' : `, capacity: ${Number(sku.capacity)}`} }\n    enableHttp2: ${Boolean(node.data.http2_enabled)}\n    enableFips: ${Boolean(node.data.fips_enabled)}${autoscale ? `\n    autoscaleConfiguration: { minCapacity: ${Number(autoscale.min_capacity)}, maxCapacity: ${Number(autoscale.max_capacity)} }` : ''}\n    gatewayIPConfigurations: [\n${gateways}\n    ]\n    frontendIPConfigurations: [\n${frontends}\n    ]\n    frontendPorts: [\n${ports}\n    ]\n    backendAddressPools: [\n${pools}\n    ]\n    backendHttpSettingsCollection: [\n${settings}\n    ]\n    httpListeners: [\n${listeners}\n    ]\n    requestRoutingRules: [\n${rules}\n    ]${waf ? `\n    webApplicationFirewallConfiguration: { enabled: ${Boolean(waf.enabled)}, firewallMode: ${bq(String(waf.firewall_mode))}, ruleSetType: ${bq(String(waf.rule_set_type))}, ruleSetVersion: ${bq(String(waf.rule_set_version))} }` : ''}\n  }\n}`
 }
 
-function bicepFirewall(node: NetworkNode, nodes: NetworkNode[]) {
+function bicepFirewall(node: NetworkNode, nodes: NetworkNode[], edges: NetworkEdge[]) {
   const key = resourceKey(node); const management = record(node.data.management_ip_configuration); const hub = record(node.data.virtual_hub)
-  const ips = records(node.data.ip_configuration).map((item) => `      {\n        name: ${bq(String(item.name))}\n        properties: {${item.subnet_id ? `\n          subnet: { id: ${bicepId(item.subnet_id, nodes)} }` : ''}${item.public_ip_address_id ? `\n          publicIPAddress: { id: ${bicepId(item.public_ip_address_id, nodes)} }` : ''}\n        }\n      }`).join('\n')
+  const ips = effectiveFirewallConfigurations(node, nodes, edges).map((item) => `      {\n        name: ${bq(String(item.name))}\n        properties: {${item.subnet_id ? `\n          subnet: { id: ${bicepId(item.subnet_id, nodes)} }` : ''}${item.public_ip_address_id ? `\n          publicIPAddress: { id: ${bicepId(item.public_ip_address_id, nodes)} }` : ''}\n        }\n      }`).join('\n')
   const additional = [
     strings(node.data.dns_servers).length ? `      'Network.DNS.Servers': ${bq(strings(node.data.dns_servers).join(','))}` : '',
     node.data.dns_proxy_enabled !== undefined ? `      'Network.DNS.EnableProxy': ${bq(String(Boolean(node.data.dns_proxy_enabled)))}` : '',
@@ -521,7 +554,7 @@ function bicepVpnGateway(node: NetworkNode, nodes: NetworkNode[], secureParamete
   const gatewayType = scalar(node.data.type ?? node.data.gatewayType, 'Vpn')
   const ips = records(node.data.ip_configuration).map((item, index) => `      {\n        name: ${bq(String(item.name ?? `vnetGatewayConfig${index || ''}`))}\n        properties: {\n          privateIPAllocationMethod: ${bq(String(item.private_ip_address_allocation ?? 'Dynamic'))}\n          subnet: { id: ${bicepId(item.subnet_id, nodes)} }${item.public_ip_address_id ? `\n          publicIPAddress: { id: ${bicepId(item.public_ip_address_id, nodes)} }` : ''}${item.private_ip_address ? `\n          privateIPAddress: ${bq(String(item.private_ip_address))}` : ''}\n        }\n      }`).join('\n')
   let radiusSecret = ''
-  if (client?.radius_server_secret) { const parameter = safe(`${key}_radius_server_secret`); secureParameters.push(`@secure()\nparam ${parameter} string`); radiusSecret = `\n      radiusServerSecret: ${parameter}` }
+  if (client?.radius_secret_required) { const parameter = safe(`${key}_radius_server_secret`); secureParameters.push(`@secure()\nparam ${parameter} string`); radiusSecret = `\n      radiusServerSecret: ${parameter}` }
   const scale = node.data.minimum_scale_unit !== undefined || node.data.maximum_scale_unit !== undefined ? `\n    autoScaleConfiguration: { bounds: { min: ${Number(node.data.minimum_scale_unit ?? 1)}, max: ${Number(node.data.maximum_scale_unit ?? node.data.minimum_scale_unit ?? 1)} } }` : ''
   return `resource ${key} 'Microsoft.Network/virtualNetworkGateways@2024-05-01' = {\n  name: ${bq(node.data.label)}\n  location: ${bq(node.data.region || 'eastus')}\n  properties: {\n    gatewayType: ${bq(gatewayType)}${gatewayType === 'Vpn' ? `\n    vpnType: ${bq(scalar(node.data.vpn_type, 'RouteBased'))}` : ''}\n    activeActive: ${Boolean(node.data.active_active ?? node.data.activeActive)}\n    enableBgp: ${Boolean(node.data.bgp_enabled)}\n    enablePrivateIpAddress: ${Boolean(node.data.private_ip_address_enabled)}${node.data.generation && node.data.generation !== 'None' ? `\n    vpnGatewayGeneration: ${bq(String(node.data.generation))}` : ''}\n    sku: { name: ${bq(scalar(node.data.sku, 'VpnGw1'))}, tier: ${bq(scalar(node.data.sku, 'VpnGw1'))} }${scale}\n    ipConfigurations: [\n${ips}\n    ]${bgp ? `\n    bgpSettings: { asn: ${Number(bgp.asn)}, peerWeight: ${Number(bgp.peer_weight ?? 0)} }` : ''}${client ? `\n    vpnClientConfiguration: {\n      vpnClientAddressPool: { addressPrefixes: [${strings(client.address_space).map(bq).join(', ')}] }\n      vpnClientProtocols: [${strings(client.vpn_client_protocols).map(bq).join(', ')}]\n      vpnAuthenticationTypes: [${strings(client.vpn_auth_types).map(bq).join(', ')}]${client.radius_server_address ? `\n      radiusServerAddress: ${bq(String(client.radius_server_address))}` : ''}${radiusSecret}\n    }` : ''}\n  }\n}`
 }
@@ -576,7 +609,7 @@ function bicep(nodes: NetworkNode[], edges: NetworkEdge[], report: ExportReport)
     }
     if (node.data.kind === 'frontDoor') resources.push(`resource ${key} 'Microsoft.Cdn/profiles@2024-09-01' = {\n  name: ${bq(node.data.label)}\n  location: 'global'\n  sku: { name: ${bq(scalar(node.data.sku_name ?? node.data.sku, 'Standard_AzureFrontDoor'))} }\n  properties: { originResponseTimeoutSeconds: ${Number(node.data.response_timeout_seconds ?? 120)} }\n}`)
     if (node.data.kind === 'appGateway') resources.push(bicepAppGateway(node, nodes))
-    if (node.data.kind === 'firewall') resources.push(bicepFirewall(node, nodes))
+    if (node.data.kind === 'firewall') resources.push(bicepFirewall(node, nodes, edges))
     if (node.data.kind === 'vpnGateway') resources.push(bicepVpnGateway(node, nodes, secureParameters))
     if (node.data.kind === 'loadBalancer') resources.push(bicepLoadBalancer(node, nodes))
     if (node.data.kind === 'privateEndpoint') resources.push(bicepPrivateEndpoint(node, nodes))
@@ -662,7 +695,7 @@ function cliApplicationGateway(node: NetworkNode, nodes: NetworkNode[], edges: N
 }
 
 function cliFirewall(node: NetworkNode, nodes: NetworkNode[], edges: NetworkEdge[], scope: string) {
-  const configurations = records(node.data.ip_configuration)
+  const configurations = effectiveFirewallConfigurations(node, nodes, edges)
   const create = [`az network firewall create ${scope}`, `--name ${shell(node.data.label)}`, `--location ${shell(node.data.region || 'eastus')}`, `--sku ${shell(scalar(node.data.sku_name ?? node.data.sku, 'AZFW_VNet'))}`, `--tier ${shell(scalar(node.data.sku_tier ?? node.data.tier, 'Standard'))}`]
   if (node.data.threat_intel_mode) create.push(`--threat-intel-mode ${shell(String(node.data.threat_intel_mode))}`)
   if (node.data.firewall_policy_id) create.push(`--firewall-policy ${shell(cliReference(node.data.firewall_policy_id, nodes))}`)
@@ -710,7 +743,7 @@ function cliVpnGateway(node: NetworkNode, nodes: NetworkNode[], edges: NetworkEd
     if (strings(client.vpn_client_protocols).length) create.push(`--client-protocol ${strings(client.vpn_client_protocols).map(shell).join(' ')}`)
     if (strings(client.vpn_auth_types).length) create.push(`--vpn-auth-type ${strings(client.vpn_auth_types).map(shell).join(' ')}`)
     if (client.radius_server_address) create.push(`--radius-server ${shell(String(client.radius_server_address))}`)
-    if (client.radius_server_secret) {
+    if (client.radius_secret_required) {
       const variable = `VPN_RADIUS_SECRET_${safe(node.id).toUpperCase()}`
       preflight.push(`${variable}="\${${variable}:?Set ${variable} to the RADIUS shared secret}"`)
       create.push(`--radius-secret "$${variable}"`)
@@ -762,7 +795,7 @@ function cliPrivateEndpoint(node: NetworkNode, nodes: NetworkNode[], edges: Netw
 function azureCli(nodes: NetworkNode[], edges: NetworkEdge[], report: ExportReport) {
   const subscription = subscriptionFor(nodes)
   const subscriptionValue = subscription ? shell(subscription) : '"${AZURE_SUBSCRIPTION_ID:?Set AZURE_SUBSCRIPTION_ID}"'
-  const commands = ['#!/usr/bin/env bash', 'set -euo pipefail', '', '# Generated by Azure Network Studio. Review before running.', unsupportedHeader(report, '#').trimEnd(), `SUBSCRIPTION_ID=${subscriptionValue}`, ''].filter((line, index, all) => line || all[index - 1] !== '')
+  const commands = ['#!/usr/bin/env bash', 'set -euo pipefail', '', '# Generated by InfraWeft. Review before running.', unsupportedHeader(report, '#').trimEnd(), `SUBSCRIPTION_ID=${subscriptionValue}`, ''].filter((line, index, all) => line || all[index - 1] !== '')
   const allowed = new Set(report.supported.map((node) => node.id))
   const scopeFor = (node: NetworkNode) => `--subscription "$SUBSCRIPTION_ID" --resource-group ${shell(node.data.resourceGroup || 'rg-network')}`
   if (report.supported.some((node) => node.data.kind === 'appGateway')) commands.push(`command -v base64 >/dev/null 2>&1 || { echo 'base64 is required to decode the embedded Application Gateway request body.' >&2; exit 1; }`, '')

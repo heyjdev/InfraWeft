@@ -9,12 +9,26 @@ lerna-debug.log*
 
 node_modules
 dist
+dist-server
 dist-ssr
+*.tgz
 *.local
 .firecrawl/
 .env
 .env.*
 !.env.example
+
+# Infrastructure state, runtime inputs, and local cloud CLI data
+.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+*.auto.tfvars
+.terraformrc
+terraform.rc
+crash.log
+crash.*.log
+.azure/
 
 # Editor directories and files
 .vscode/*

@@ -1,5 +1,5 @@
 export type ResourceKind = 'vnet' | 'subnet' | 'appGateway' | 'natGateway' | 'firewall' | 'vpnGateway' | 'loadBalancer' | 'privateEndpoint' | 'frontDoor' | 'publicIp' | 'networkSecurityGroup' | 'routeTable'
-export type EdgeKind = 'peering' | 'attachment' | 'subnetNetworkSecurityGroup' | 'subnetRouteTable' | 'subnetNatGateway' | 'natGatewayPublicIp'
+export type EdgeKind = 'peering' | 'attachment' | 'subnetNetworkSecurityGroup' | 'subnetRouteTable' | 'subnetNatGateway' | 'natGatewayPublicIp' | 'firewallSubnet' | 'firewallPublicIp' | 'appGatewayPublicIp'
 
 export type NetworkNodeData = {
   label: string
@@ -59,6 +59,9 @@ const ASSOCIATION_PAIRS: Array<{ kinds: [ResourceKind, ResourceKind]; kind: Excl
   { kinds: ['subnet', 'routeTable'], kind: 'subnetRouteTable', label: 'Subnet ↔ route table' },
   { kinds: ['subnet', 'natGateway'], kind: 'subnetNatGateway', label: 'Subnet ↔ NAT Gateway' },
   { kinds: ['natGateway', 'publicIp'], kind: 'natGatewayPublicIp', label: 'NAT Gateway ↔ Public IP' },
+  { kinds: ['firewall', 'subnet'], kind: 'firewallSubnet', label: 'Azure Firewall ↔ Subnet' },
+  { kinds: ['firewall', 'publicIp'], kind: 'firewallPublicIp', label: 'Azure Firewall ↔ Public IP' },
+  { kinds: ['appGateway', 'publicIp'], kind: 'appGatewayPublicIp', label: 'Application Gateway ↔ Public IP' },
 ]
 
 export function associationKindFor(left: ResourceKind, right: ResourceKind) {
@@ -70,6 +73,101 @@ export const ASSOCIATION_LABELS: Record<Exclude<EdgeKind, 'peering' | 'attachmen
   subnetRouteTable: 'Subnet to route table association',
   subnetNatGateway: 'Subnet to NAT Gateway association',
   natGatewayPublicIp: 'NAT Gateway to Public IP association',
+  firewallSubnet: 'Azure Firewall to subnet IP configuration',
+  firewallPublicIp: 'Azure Firewall to Public IP configuration',
+  appGatewayPublicIp: 'Application Gateway to Public IP frontend configuration',
+}
+
+const ATTACHABLE_CHILDREN: Partial<Record<ResourceKind, ResourceKind[]>> = {
+  vnet: ['subnet'],
+  subnet: ['networkSecurityGroup', 'routeTable', 'natGateway', 'firewall'],
+  natGateway: ['publicIp'],
+  firewall: ['publicIp'],
+  appGateway: ['publicIp'],
+}
+
+export const getAttachableChildKinds = (kind: ResourceKind): ResourceKind[] => [...(ATTACHABLE_CHILDREN[kind] ?? [])]
+
+const intToIpv4 = (value: number) => [24, 16, 8, 0].map((shift) => (value >>> shift) & 255).join('.')
+
+function nextSubnetCidr(vnet: NetworkNode, nodes: NetworkNode[]) {
+  const parentRange = addressSpacesFor(vnet).map(parseCidr).find((range): range is NonNullable<ReturnType<typeof parseCidr>> => Boolean(range))
+  if (!parentRange) return '10.0.1.0/24'
+  const prefix = Math.min(29, Math.max(24, parentRange.prefix))
+  const blockSize = 2 ** (32 - prefix)
+  const used = nodes.filter((node) => node.data.kind === 'subnet' && node.data.parentVnetId === vnet.id).flatMap((node) => addressSpacesFor(node))
+  for (let start = parentRange.start + blockSize; start + blockSize - 1 <= parentRange.end; start += blockSize) {
+    const candidate = `${intToIpv4(start)}/${prefix}`
+    if (!used.some((cidr) => cidrsOverlap(candidate, cidr))) return candidate
+  }
+  return `${intToIpv4(parentRange.start)}/${prefix}`
+}
+
+export function attachSubnetToVnet(subnet: NetworkNode, vnet: NetworkNode, nodes: NetworkNode[], edgeId: string): { node: NetworkNode; edge: NetworkEdge; cidrAdjusted: boolean } {
+  if (subnet.data.kind !== 'subnet' || vnet.data.kind !== 'vnet') throw new Error('Only a subnet can be attached to a virtual network')
+  const currentCidrs = addressSpacesFor(subnet)
+  const parentRanges = addressSpacesFor(vnet).map(parseCidr).filter((range): range is NonNullable<ReturnType<typeof parseCidr>> => Boolean(range))
+  const siblings = nodes.filter((node) => node.id !== subnet.id && node.data.kind === 'subnet' && node.data.parentVnetId === vnet.id)
+  const currentFits = currentCidrs.length > 0 && currentCidrs.every((cidr) => {
+    const range = parseCidr(cidr)
+    return Boolean(range && parentRanges.some((parentRange) => parentRange.start <= range.start && parentRange.end >= range.end) && !siblings.some((sibling) => addressSpacesFor(sibling).some((siblingCidr) => cidrsOverlap(cidr, siblingCidr))))
+  })
+  const cidrs = currentFits ? currentCidrs : [nextSubnetCidr(vnet, nodes.filter((node) => node.id !== subnet.id))]
+  const position = { x: vnet.position.x, y: vnet.position.y + 150 }
+  while (nodes.some((node) => node.id !== subnet.id && Math.abs(node.position.x - position.x) < 235 && Math.abs(node.position.y - position.y) < 95)) position.y += 120
+  return {
+    node: { ...subnet, position, data: { ...subnet.data, parentVnetId: vnet.id, region: vnet.data.region, resourceGroup: vnet.data.resourceGroup, addressSpace: cidrs[0], addressSpaces: cidrs } },
+    edge: { id: edgeId, source: vnet.id, target: subnet.id, type: 'smoothstep', label: 'Contains', markerEnd: { type: 'arrowclosed' }, data: { kind: 'attachment' } },
+    cidrAdjusted: !currentFits,
+  }
+}
+
+export function createAttachedResource(parent: NetworkNode, childKind: ResourceKind, nodes: NetworkNode[], nodeId: string, edgeId: string): { node: NetworkNode; edge: NetworkEdge; parentPatch?: Partial<NetworkNodeData> } {
+  if (!getAttachableChildKinds(parent.data.kind).includes(childKind)) throw new Error(`${RESOURCE_LABELS[childKind]} cannot be attached directly to ${RESOURCE_LABELS[parent.data.kind]}`)
+  const ordinal = nodes.filter((node) => node.data.kind === childKind).length + 1
+  const childKinds = getAttachableChildKinds(parent.data.kind)
+  const childIndex = childKinds.indexOf(childKind)
+  const horizontalOffset = childKinds.length > 1 ? (childIndex - (childKinds.length - 1) / 2) * 250 : 0
+  const parentVnet = parent.data.kind === 'subnet' ? nodes.find((node) => node.id === parent.data.parentVnetId && node.data.kind === 'vnet') : parent.data.kind === 'vnet' ? parent : undefined
+  if (parent.data.kind === 'subnet' && childKind === 'firewall' && !parentVnet) throw new Error('Attach the subnet to a parent virtual network before adding an Azure Firewall')
+  const data = defaultNodeData(childKind, ordinal)
+  data.region = parentVnet?.data.region ?? parent.data.region ?? data.region
+  data.resourceGroup = parentVnet?.data.resourceGroup ?? parent.data.resourceGroup ?? data.resourceGroup
+  if (childKind === 'subnet') {
+    const cidr = nextSubnetCidr(parent, nodes)
+    data.parentVnetId = parent.id
+    data.addressSpace = cidr
+    data.addressSpaces = [cidr]
+  }
+  let parentPatch: Partial<NetworkNodeData> | undefined
+  if (parent.data.kind === 'subnet' && childKind === 'firewall') {
+    data.ip_configuration = [{ name: 'firewall-ip-1', subnet_id: parent.id }]
+    parentPatch = { label: 'AzureFirewallSubnet' }
+  }
+  if (parent.data.kind === 'firewall' && childKind === 'publicIp') {
+    const configurations = Array.isArray(parent.data.ip_configuration) ? structuredClone(parent.data.ip_configuration as Array<Record<string, unknown>>) : []
+    const openIndex = configurations.findIndex((configuration) => !configuration.public_ip_address_id)
+    const reference = `resource-reference://${nodeId}`
+    if (openIndex >= 0) configurations[openIndex] = { ...configurations[openIndex], public_ip_address_id: reference }
+    else configurations.push({ name: `firewall-ip-${configurations.length + 1}`, public_ip_address_id: reference })
+    parentPatch = { ip_configuration: configurations }
+  }
+  if (parent.data.kind === 'appGateway' && childKind === 'publicIp') {
+    const configurations = Array.isArray(parent.data.frontend_ip_configuration) ? structuredClone(parent.data.frontend_ip_configuration as Array<Record<string, unknown>>) : []
+    const openIndex = configurations.findIndex((configuration) => !configuration.public_ip_address_id)
+    const reference = `resource-reference://${nodeId}`
+    if (openIndex >= 0) configurations[openIndex] = { ...configurations[openIndex], public_ip_address_id: reference }
+    else configurations.push({ name: `public-frontend-${configurations.length + 1}`, public_ip_address_id: reference })
+    parentPatch = { frontend_ip_configuration: configurations }
+  }
+  const edgeKind = associationKindFor(parent.data.kind, childKind) ?? 'attachment'
+  const position = { x: parent.position.x + horizontalOffset, y: parent.position.y + 150 }
+  while (nodes.some((node) => Math.abs(node.position.x - position.x) < 235 && Math.abs(node.position.y - position.y) < 95)) position.y += 120
+  return {
+    node: { id: nodeId, type: 'azureResource', position, data },
+    edge: { id: edgeId, source: parent.id, target: nodeId, type: 'smoothstep', label: edgeKind === 'attachment' ? 'Contains' : ASSOCIATION_LABELS[edgeKind], markerEnd: { type: 'arrowclosed' }, data: { kind: edgeKind } },
+    parentPatch,
+  }
 }
 
 export const AZURE_REGIONS = ['eastus', 'eastus2', 'westus2', 'centralus', 'southcentralus', 'westeurope'] as const
@@ -194,7 +292,7 @@ export const RESOURCE_SCHEMAS: Record<ResourceKind, ResourceSchema> = {
       { key: 'gateway_ip_configuration', label: 'Gateway subnet attachments', type: 'block', section: 'Core deployment', required: true, repeatable: true, minItems: 1, maxItems: 2, fields: [{ key: 'name', label: 'Configuration name', type: 'text', required: true }, { key: 'subnet_id', label: 'Application Gateway subnet', type: 'resourceRef', resourceKind: 'subnet', required: true }] },
       { key: 'frontend_ip_configuration', label: 'Frontend IP configurations', type: 'block', section: 'Core deployment', required: true, repeatable: true, minItems: 1, fields: [
         { key: 'name', label: 'Name', type: 'text', required: true }, { key: 'subnet_id', label: 'Private frontend subnet', type: 'resourceRef', resourceKind: 'subnet' },
-        { key: 'public_ip_address_id', label: 'Public IP resource ID', type: 'text' }, { key: 'private_ip_address_allocation', label: 'Private allocation', type: 'select', options: ['Dynamic', 'Static'] },
+        { key: 'public_ip_address_id', label: 'Public IP', type: 'resourceRef', resourceKind: 'publicIp' }, { key: 'private_ip_address_allocation', label: 'Private allocation', type: 'select', options: ['Dynamic', 'Static'] },
         { key: 'private_ip_address', label: 'Static private IP', type: 'text', visibleWhen: { key: 'private_ip_address_allocation', equals: 'Static' } },
       ] },
       { key: 'frontend_port', label: 'Frontend ports', type: 'block', section: 'Core deployment', required: true, repeatable: true, minItems: 1, fields: [{ key: 'name', label: 'Name', type: 'text', required: true }, { key: 'port', label: 'Port', type: 'number', required: true, min: 1, max: 65535, step: 1 }] },
@@ -261,7 +359,7 @@ export const RESOURCE_SCHEMAS: Record<ResourceKind, ResourceSchema> = {
       ] },
       { key: 'vpn_client_configuration', label: 'Point-to-site VPN', type: 'block', section: 'Point-to-site', visibleWhen: { key: 'type', equals: 'Vpn' }, fields: [
         { key: 'address_space', label: 'Client address spaces', type: 'cidrList', required: true, minItems: 1 }, { key: 'vpn_client_protocols', label: 'Client protocols', type: 'stringList', help: 'SSTP, IkeV2, OpenVPN' },
-        { key: 'vpn_auth_types', label: 'Authentication types', type: 'stringList', help: 'AAD, Radius, Certificate' }, { key: 'radius_server_address', label: 'RADIUS server address', type: 'text', help: 'Required with the legacy RADIUS shared secret field.' }, { key: 'radius_server_secret', label: 'RADIUS shared secret', type: 'password', help: 'Masked locally; prefer a secret reference in deployment workflows.' },
+        { key: 'vpn_auth_types', label: 'Authentication types', type: 'stringList', help: 'AAD, Radius, Certificate' }, { key: 'radius_server_address', label: 'RADIUS server address', type: 'text', help: 'Required when a deployment-time RADIUS secret is enabled.' }, { key: 'radius_secret_required', label: 'Require RADIUS secret at deployment', type: 'boolean', help: 'The secret value is supplied through a sensitive Terraform/Bicep input or an environment variable and is never stored in the design.' },
       ] },
     ],
     defaults: { gatewayType: 'Vpn', type: 'Vpn', vpn_type: 'RouteBased', sku: 'VpnGw1', activeActive: false, active_active: false, bgp_enabled: false, ip_configuration: [] }, export: allExportersSupportedComplex,
@@ -409,7 +507,7 @@ export function isNetworkDesign(value: unknown): value is NetworkDesign {
   for (const candidate of design.edges) {
     const edge = candidate as Partial<NetworkEdge>
     if (!boundedString(edge.id) || edgeIds.has(edge.id) || !boundedString(edge.source) || !boundedString(edge.target) || !ids.has(edge.source) || !ids.has(edge.target)) return false
-    if (edge.data?.kind && !['peering', 'attachment', 'subnetNetworkSecurityGroup', 'subnetRouteTable', 'subnetNatGateway', 'natGatewayPublicIp'].includes(edge.data.kind)) return false
+    if (edge.data?.kind && !['peering', 'attachment', 'subnetNetworkSecurityGroup', 'subnetRouteTable', 'subnetNatGateway', 'natGatewayPublicIp', 'firewallSubnet', 'firewallPublicIp', 'appGatewayPublicIp'].includes(edge.data.kind)) return false
     edgeIds.add(edge.id)
   }
   return true
@@ -553,8 +651,9 @@ export function validateDesign(nodes: NetworkNode[], edges: NetworkEdge[]) {
   if (subscriptions.size > 1) issues.push('Mixed-subscription export is not supported')
   const resourceNames = new Set<string>()
   for (const node of nodes) {
-    const key = `${node.data.resourceGroup || 'rg-network'}/${node.data.label}`.toLowerCase()
-    if (resourceNames.has(key)) issues.push(`Duplicate resource name in resource group: ${node.data.label}`)
+    const scope = node.data.kind === 'subnet' ? `${node.data.resourceGroup || 'rg-network'}/${node.data.parentVnetId || '(missing-vnet)'}` : node.data.resourceGroup || 'rg-network'
+    const key = `${scope}/${node.data.label}`.toLowerCase()
+    if (resourceNames.has(key)) issues.push(`Duplicate resource name in ${node.data.kind === 'subnet' ? 'virtual network' : 'resource group'}: ${node.data.label}`)
     resourceNames.add(key)
   }
   const peeringPairs = new Set<string>()

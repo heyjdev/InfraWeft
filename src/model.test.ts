@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { associationKindFor, AZURE_REGIONS, cidrsOverlap, defaultNodeData, isNetworkDesign, parseCidr, RESOURCE_SCHEMAS, starterDesign, validateDesign } from './model'
+import { associationKindFor, attachSubnetToVnet, AZURE_REGIONS, cidrsOverlap, createAttachedResource, defaultNodeData, getAttachableChildKinds, isNetworkDesign, parseCidr, RESOURCE_SCHEMAS, starterDesign, validateDesign, type NetworkEdge, type NetworkNode } from './model'
 import { generateInfrastructure, generateInfrastructureResult, getExportReport } from './generators'
 
 describe('CIDR validation', () => {
@@ -47,6 +47,92 @@ describe('CIDR validation', () => {
     const nodes = structuredClone(starterDesign.nodes)
     nodes[0].data.imported = true
     expect(validateDesign(nodes, starterDesign.edges)).toContain('Imported resources are diagram-only until explicitly adopted for management')
+  })
+})
+
+describe('attached resource creation', () => {
+  it('offers only modeled direct children for each parent kind', () => {
+    expect(getAttachableChildKinds('vnet')).toEqual(['subnet'])
+    expect(getAttachableChildKinds('subnet')).toEqual(['networkSecurityGroup', 'routeTable', 'natGateway', 'firewall'])
+    expect(getAttachableChildKinds('natGateway')).toEqual(['publicIp'])
+    expect(getAttachableChildKinds('firewall')).toEqual(['publicIp'])
+    expect(getAttachableChildKinds('appGateway')).toEqual(['publicIp'])
+  })
+
+  it('creates a subnet inside its VNet with inherited scope and a containment edge', () => {
+    const vnet = structuredClone(starterDesign.nodes[0])
+    const result = createAttachedResource(vnet, 'subnet', [vnet], 'child-subnet', 'child-edge')
+    expect(result.node.data).toMatchObject({ kind: 'subnet', parentVnetId: vnet.id, region: vnet.data.region, resourceGroup: vnet.data.resourceGroup, addressSpace: '10.0.1.0/24' })
+    expect(result.node.position.y).toBeGreaterThan(vnet.position.y)
+    expect(result.edge).toMatchObject({ id: 'child-edge', source: vnet.id, target: 'child-subnet', data: { kind: 'attachment' } })
+    expect(validateDesign([vnet, result.node], [result.edge])).toEqual([])
+  })
+
+  it('moves a new child down until it no longer overlaps an existing resource', () => {
+    const vnet = structuredClone(starterDesign.nodes[0])
+    const blocker = { ...structuredClone(starterDesign.nodes[1]), position: { x: vnet.position.x, y: vnet.position.y + 150 } }
+    const result = createAttachedResource(vnet, 'subnet', [vnet, blocker], 'subnet', 'edge')
+    expect(result.node.position.y).toBeGreaterThan(blocker.position.y + 90)
+  })
+
+  it('attaches an NSG to a subnet with the typed association and inherited VNet scope', () => {
+    const vnet = structuredClone(starterDesign.nodes[0])
+    const subnet = createAttachedResource(vnet, 'subnet', [vnet], 'subnet', 'subnet-edge').node
+    const result = createAttachedResource(subnet, 'networkSecurityGroup', [vnet, subnet], 'nsg', 'nsg-edge')
+    expect(result.node.data).toMatchObject({ kind: 'networkSecurityGroup', region: vnet.data.region, resourceGroup: vnet.data.resourceGroup })
+    expect(result.edge).toMatchObject({ source: subnet.id, target: 'nsg', data: { kind: 'subnetNetworkSecurityGroup' } })
+  })
+
+  it('reparents a standalone subnet, fixes an out-of-range default prefix, and adds containment', () => {
+    const vnet = structuredClone(starterDesign.nodes[0])
+    const subnet: NetworkNode = { id: 'standalone-subnet', type: 'azureResource', position: { x: 900, y: 900 }, data: { ...defaultNodeData('subnet'), label: 'subnet-1', addressSpace: '10.30.1.0/24', addressSpaces: ['10.30.1.0/24'] } }
+    const result = attachSubnetToVnet(subnet, vnet, [vnet, subnet], 'containment-edge')
+    expect(result.node.data).toMatchObject({ parentVnetId: vnet.id, addressSpace: '10.0.1.0/24', addressSpaces: ['10.0.1.0/24'], region: vnet.data.region, resourceGroup: vnet.data.resourceGroup })
+    expect(result.edge).toMatchObject({ source: vnet.id, target: subnet.id, data: { kind: 'attachment' } })
+    expect(getExportReport([vnet, result.node], [result.edge], 'terraform').unsupported).toEqual([])
+  })
+
+  it('preserves a valid subnet prefix when selecting its parent VNet', () => {
+    const vnet = structuredClone(starterDesign.nodes[0])
+    const subnet: NetworkNode = { id: 'standalone-subnet', type: 'azureResource', position: { x: 900, y: 900 }, data: { ...defaultNodeData('subnet'), label: 'subnet-1', addressSpace: '10.0.9.0/24', addressSpaces: ['10.0.9.0/24'] } }
+    const result = attachSubnetToVnet(subnet, vnet, [vnet, subnet], 'containment-edge')
+    expect(result.node.data.addressSpaces).toEqual(['10.0.9.0/24'])
+  })
+
+  it('creates and references a dedicated Public IP from an Azure Firewall configuration', () => {
+    const firewall = { ...structuredClone(starterDesign.nodes[1]), data: { ...defaultNodeData('firewall'), label: 'firewall', ip_configuration: [{ name: 'primary', subnet_id: 'subnet' }] } }
+    const result = createAttachedResource(firewall, 'publicIp', [firewall], 'firewall-pip', 'firewall-pip-edge')
+    expect(result.edge).toMatchObject({ source: firewall.id, target: 'firewall-pip', data: { kind: 'firewallPublicIp' } })
+    expect(result.parentPatch).toEqual({ ip_configuration: [{ name: 'primary', subnet_id: 'subnet', public_ip_address_id: 'resource-reference://firewall-pip' }] })
+    expect(result.node.data).toMatchObject({ kind: 'publicIp', allocation_method: 'Static', sku: 'Standard' })
+  })
+
+  it('creates and references a Public IP from an Application Gateway frontend configuration', () => {
+    const appGateway: NetworkNode = { id: 'appgw', type: 'azureResource', position: { x: 200, y: 180 }, data: { ...defaultNodeData('appGateway'), label: 'agw-app', frontend_ip_configuration: [{ name: 'public-frontend' }] } }
+    const result = createAttachedResource(appGateway, 'publicIp', [appGateway], 'appgw-pip', 'appgw-pip-edge')
+    expect(result.edge).toMatchObject({ source: appGateway.id, target: 'appgw-pip', data: { kind: 'appGatewayPublicIp' } })
+    expect(result.parentPatch).toEqual({ frontend_ip_configuration: [{ name: 'public-frontend', public_ip_address_id: 'resource-reference://appgw-pip' }] })
+    expect(result.node.data).toMatchObject({ kind: 'publicIp', allocation_method: 'Static', sku: 'Standard' })
+  })
+
+  it('creates an Azure Firewall directly from a parented subnet and configures the subnet reference', () => {
+    const vnet = structuredClone(starterDesign.nodes[0])
+    const subnet: NetworkNode = { id: 'firewall-subnet', type: 'azureResource', position: { x: 120, y: 220 }, data: { ...defaultNodeData('subnet'), label: 'snet-firewall', parentVnetId: vnet.id, addressSpace: '10.0.1.0/24', addressSpaces: ['10.0.1.0/24'] } }
+    const created = createAttachedResource(subnet, 'firewall', [vnet, subnet], 'firewall-child', 'firewall-edge')
+    expect(created.node.data.kind).toBe('firewall')
+    expect(created.node.data.ip_configuration).toEqual([{ name: 'firewall-ip-1', subnet_id: 'firewall-subnet' }])
+    expect(created.edge).toMatchObject({ source: subnet.id, target: 'firewall-child', data: { kind: 'firewallSubnet' } })
+    expect(created.parentPatch).toEqual({ label: 'AzureFirewallSubnet' })
+    expect(created.node.data).toMatchObject({ region: vnet.data.region, resourceGroup: vnet.data.resourceGroup })
+  })
+
+  it('requires a subnet to have a parent VNet before adding an Azure Firewall', () => {
+    const subnet: NetworkNode = { id: 'orphan-subnet', type: 'azureResource', position: { x: 0, y: 0 }, data: { ...defaultNodeData('subnet'), label: 'orphan' } }
+    expect(() => createAttachedResource(subnet, 'firewall', [subnet], 'firewall-child', 'firewall-edge')).toThrow('parent virtual network')
+  })
+
+  it('rejects child kinds that do not have a modeled parent relationship', () => {
+    expect(() => createAttachedResource(starterDesign.nodes[0], 'networkSecurityGroup', starterDesign.nodes, 'bad', 'bad-edge')).toThrow('cannot be attached directly')
   })
 })
 
@@ -149,6 +235,31 @@ describe('code generation', () => {
     expect(cli).toContain('az afd profile create')
     expect(getExportReport(nodes, [], 'terraform').unsupported).toEqual([])
   })
+  it('infers an Azure Firewall IP configuration from attached subnet and Public IP edges', () => {
+    const vnet = structuredClone(starterDesign.nodes[0])
+    const subnet: NetworkNode = { id: 'firewall-subnet', type: 'azureResource', position: { x: 0, y: 0 }, data: { ...defaultNodeData('subnet'), label: 'AzureFirewallSubnet', parentVnetId: vnet.id, addressSpace: '10.0.1.0/24', addressSpaces: ['10.0.1.0/24'] } }
+    const firewall: NetworkNode = { id: 'firewall-test', type: 'azureResource', position: { x: 0, y: 0 }, data: { ...defaultNodeData('firewall'), label: 'afw-test' } }
+    const publicIp: NetworkNode = { id: 'firewall-pip', type: 'azureResource', position: { x: 0, y: 0 }, data: { ...defaultNodeData('publicIp'), label: 'pip-firewall' } }
+    const edges: NetworkEdge[] = [
+      { id: 'subnet-parent', source: vnet.id, target: subnet.id, data: { kind: 'attachment' } },
+      { id: 'firewall-subnet', source: firewall.id, target: subnet.id, data: { kind: 'attachment' } },
+      { id: 'firewall-pip', source: firewall.id, target: publicIp.id, data: { kind: 'firewallPublicIp' } },
+    ]
+    const nodes = [vnet, subnet, firewall, publicIp]
+    expect(getExportReport(nodes, edges, 'terraform').unsupported).toEqual([])
+    const terraform = generateInfrastructure(nodes, edges, 'terraform')
+    expect(terraform).toContain('subnet_id            = azurerm_subnet.')
+    expect(terraform).toContain('public_ip_address_id = azurerm_public_ip.')
+  })
+
+  it('reports only the missing Public IP when an Azure Firewall subnet is already attached', () => {
+    const vnet = structuredClone(starterDesign.nodes[0])
+    const subnet: NetworkNode = { id: 'firewall-subnet', type: 'azureResource', position: { x: 0, y: 0 }, data: { ...defaultNodeData('subnet'), label: 'AzureFirewallSubnet', parentVnetId: vnet.id, addressSpace: '10.0.1.0/24', addressSpaces: ['10.0.1.0/24'] } }
+    const firewall: NetworkNode = { id: 'firewall-test', type: 'azureResource', position: { x: 0, y: 0 }, data: { ...defaultNodeData('firewall'), label: 'afw-test' } }
+    const edges: NetworkEdge[] = [{ id: 'firewall-subnet', source: firewall.id, target: subnet.id, data: { kind: 'attachment' } }]
+    expect(getExportReport([vnet, subnet, firewall], edges, 'terraform').unsupported.find(({ node }) => node.id === firewall.id)?.reason).toBe('Every Azure Firewall IP configuration requires a Public IP reference.')
+  })
+
   it('reports every unsupported or underconfigured node in output and export metadata', () => {
     const nodes = structuredClone(starterDesign.nodes)
     const report = getExportReport(nodes, starterDesign.edges, 'terraform')

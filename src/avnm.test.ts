@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { buildAvnmPlan, defaultAvnmSettings, generateAvnm } from './avnm'
 import type { NetworkDesign, NetworkEdge, NetworkNode } from './model'
+import { validateRequest } from '../server/validation'
 
 const vnet = (id: string, label: string, subscriptionId = '11111111-1111-1111-1111-111111111111'): NetworkNode => ({
   id,
@@ -152,6 +153,7 @@ describe('AVNM conversion', () => {
     const nodes = [vnet('hub', 'hub'), vnet('a', 'a'), vnet('b', 'b')]
     const plan = buildAvnmPlan(design(nodes, [peer('hub', 'a'), peer('hub', 'b')]), settings())
     const terraform = generateAvnm(plan, 'terraform')
+    expect(validateRequest({ format: 'terraform', code: terraform }).ok).toBe(true)
     expect(terraform).toContain('variable "confirm_dedicated_network_manager"')
     expect(terraform).toContain('variable "confirm_region_history_complete"')
     expect(terraform).toContain('AVNM commits replace complete regional connectivity goal state')

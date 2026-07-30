@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" fill="none" role="img" aria-label="InfraWeft mark">
+  
+  <defs>
+    <linearGradient id="iw-warp" x1="0" y1="0" x2="0" y2="64" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#4a95ff"></stop><stop offset="1" stop-color="#0a60e6"></stop>
+    </linearGradient>
+    <linearGradient id="iw-weft" x1="0" y1="0" x2="64" y2="0" gradientUnits="userSpaceOnUse">
+      <stop offset="0" stop-color="#2adfdc"></stop><stop offset="1" stop-color="#10c1c0"></stop>
+    </linearGradient>
+  </defs>
+  
+  <rect x="13.5" y="4" width="9" height="56" rx="4.5" fill="url(#iw-warp)"></rect>
+  <rect x="41.5" y="4" width="9" height="56" rx="4.5" fill="url(#iw-warp)"></rect>
+  
+  <rect x="4" y="13.5" width="56" height="9" rx="4.5" fill="url(#iw-weft)"></rect>
+  <rect x="4" y="41.5" width="56" height="9" rx="4.5" fill="url(#iw-weft)"></rect>
+  
+  <rect x="13.5" y="13.5" width="9" height="9" rx="1.5" fill="url(#iw-warp)"></rect>
+  <rect x="41.5" y="41.5" width="9" height="9" rx="1.5" fill="url(#iw-warp)"></rect>
+</svg>
