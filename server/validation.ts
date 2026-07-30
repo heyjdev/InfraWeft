@@ -1,7 +1,7 @@
 import { execFile } from 'node:child_process'
 import { mkdtemp, rm, writeFile } from 'node:fs/promises'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { homedir, tmpdir } from 'node:os'
+import { delimiter, join } from 'node:path'
 import { promisify } from 'node:util'
 
 const exec = promisify(execFile)
@@ -11,6 +11,165 @@ export type ValidationPlan = { fileName: string; steps: ValidationStep[] }
 export type ValidationResult = { name: string; status: 'passed' | 'failed'; output: string }
 const MAX_CODE_BYTES = 500_000
 const TERRAFORM_PROVIDER_ERROR = 'Terraform validation allows only hashicorp/azurerm 4.81.0.'
+const BICEP_EXTERNAL_ERROR = 'Bicep modules, test declarations, extensions, providers, imports, and compile-time file reads are not allowed in local validation.'
+
+function stripBicepComments(code: string) {
+  let result = ''
+  let index = 0
+  let quote: "'" | "'''" | undefined
+  while (index < code.length) {
+    if (quote) {
+      if (quote === "'''" && code.startsWith("'''", index)) {
+        result += "'''"
+        index += 3
+        quote = undefined
+        continue
+      }
+      const current = code[index]
+      result += current
+      if (quote === "'" && current === '\\' && code[index + 1]) {
+        result += code[index + 1]
+        index += 2
+        continue
+      }
+      if (quote === "'" && current === "'") quote = undefined
+      index += 1
+      continue
+    }
+    if (code.startsWith("'''", index)) {
+      quote = "'''"
+      result += "'''"
+      index += 3
+      continue
+    }
+    const current = code[index]
+    const next = code[index + 1]
+    if (current === "'") {
+      quote = "'"
+      result += current
+      index += 1
+      continue
+    }
+    if (current === '/' && next === '/') {
+      while (index < code.length && code[index] !== '\n') index += 1
+      result += '\n'
+      continue
+    }
+    if (current === '/' && next === '*') {
+      index += 2
+      while (index < code.length && !(code[index] === '*' && code[index + 1] === '/')) index += 1
+      index += 2
+      result += ' '
+      continue
+    }
+    result += current
+    index += 1
+  }
+  return result
+}
+
+function stripBicepStrings(code: string) {
+  let result = ''
+  let index = 0
+  while (index < code.length) {
+    if (code.startsWith("'''", index)) {
+      index += 3
+      while (index < code.length && !code.startsWith("'''", index)) index += 1
+      index += 3
+      result += ' '
+      continue
+    }
+    if (code[index] === "'") {
+      index += 1
+      while (index < code.length) {
+        if (code[index] === '\\' && code[index + 1]) index += 2
+        else if (code[index] === "'") {
+          index += 1
+          break
+        } else index += 1
+      }
+      result += ' '
+      continue
+    }
+    result += code[index]
+    index += 1
+  }
+  return result
+}
+
+function bicepExecutableCode(code: string) {
+  function scanString(start: number): { text: string; index: number } {
+    let text = ''
+    let index = start + 1
+    while (index < code.length) {
+      if (code[index] === '\\' && code[index + 1]) {
+        index += 2
+        continue
+      }
+      if (code[index] === "'") return { text, index: index + 1 }
+      if (code[index] === '$' && code[index + 1] === '{') {
+        const interpolation = scanCode(index + 2, true)
+        text += ` ${interpolation.text} `
+        index = interpolation.index
+        continue
+      }
+      index += 1
+    }
+    return { text, index }
+  }
+
+  function scanCode(start: number, stopAtClosingBrace: boolean): { text: string; index: number } {
+    let text = ''
+    let index = start
+    let nestedBraces = 0
+    while (index < code.length) {
+      if (code.startsWith("'''", index)) {
+        index += 3
+        while (index < code.length && !code.startsWith("'''", index)) index += 1
+        index += 3
+        text += ' '
+        continue
+      }
+      if (code[index] === "'") {
+        const quoted = scanString(index)
+        text += ` ${quoted.text} `
+        index = quoted.index
+        continue
+      }
+      if (code[index] === '/' && code[index + 1] === '/') {
+        while (index < code.length && code[index] !== '\n') index += 1
+        text += '\n'
+        continue
+      }
+      if (code[index] === '/' && code[index + 1] === '*') {
+        index += 2
+        while (index < code.length && !(code[index] === '*' && code[index + 1] === '/')) index += 1
+        index += 2
+        text += ' '
+        continue
+      }
+      if (stopAtClosingBrace && code[index] === '{') nestedBraces += 1
+      else if (stopAtClosingBrace && code[index] === '}') {
+        if (nestedBraces === 0) return { text, index: index + 1 }
+        nestedBraces -= 1
+      }
+      text += code[index]
+      index += 1
+    }
+    return { text, index }
+  }
+
+  return scanCode(0, false).text
+}
+
+function bicepPolicyError(code: string) {
+  const uncommented = stripBicepComments(code)
+  const structure = stripBicepStrings(uncommented)
+  const executable = bicepExecutableCode(uncommented)
+  if (/\b(?:module|extension|provider|import|test)\b/i.test(structure)) return BICEP_EXTERNAL_ERROR
+  if (/\b(?:loadTextContent|loadFileAsBase64|loadJsonContent|loadYamlContent|loadDirectoryFileInfo)\s*\(/i.test(executable)) return BICEP_EXTERNAL_ERROR
+  return undefined
+}
 
 function stripTerraformComments(code: string) {
   let result = ''
@@ -129,6 +288,9 @@ export function validateRequest(value: unknown): { ok: true; format: ValidationF
   if (format === 'terraform') {
     const error = terraformPolicyError(code)
     if (error) return { ok: false, error }
+  } else if (format === 'bicep') {
+    const error = bicepPolicyError(code)
+    if (error) return { ok: false, error }
   }
   return { ok: true, format: format as ValidationFormat, code }
 }
@@ -144,14 +306,14 @@ export function validationPlan(format: ValidationFormat, directory: string): Val
   }
   if (format === 'bicep') return {
     fileName: 'network.bicep',
-    steps: [{ name: 'Bicep build', command: 'az', args: ['bicep', 'build', '--file', join(directory, 'network.bicep'), '--outfile', join(directory, 'network.json'), '--only-show-errors'] }],
+    steps: [{ name: 'Bicep build', command: 'az', args: ['bicep', 'build', '--file', join(directory, 'network.bicep'), '--outfile', join(directory, 'network.json'), '--no-restore', '--only-show-errors'] }],
   }
   return { fileName: 'network.sh', steps: [{ name: 'Bash syntax', command: 'bash', args: ['-n', join(directory, 'network.sh')] }] }
 }
 
 const publicOutput = (value: string, directory: string) => value.replaceAll(directory, '<temporary-directory>').slice(0, 12_000).trim()
 
-function validationEnvironment(format: ValidationFormat, directory: string) {
+export function validationEnvironment(format: ValidationFormat, directory: string) {
   const environment: NodeJS.ProcessEnv = {
     TF_IN_AUTOMATION: '1',
     AZURE_CORE_COLLECT_TELEMETRY: '0',
@@ -161,6 +323,19 @@ function validationEnvironment(format: ValidationFormat, directory: string) {
     environment.HOME = directory
     environment.USERPROFILE = directory
     environment.TF_CLI_CONFIG_FILE = join(directory, 'terraform.rc')
+  } else if (format === 'bicep') {
+    const sourceAzureConfig = process.env.AZURE_CONFIG_DIR || join(homedir(), '.azure')
+    const executablePath = environment.PATH || environment.Path || ''
+    environment.PATH = [executablePath, join(sourceAzureConfig, 'bin')].filter(Boolean).join(delimiter)
+    delete environment.Path
+    environment.HOME = directory
+    environment.USERPROFILE = directory
+    environment.XDG_CACHE_HOME = join(directory, '.cache')
+    environment.XDG_CONFIG_HOME = join(directory, '.config')
+    environment.AZURE_CONFIG_DIR = join(directory, 'azure')
+    environment.AZURE_EXTENSION_DIR = join(directory, 'azure', 'extensions')
+    environment.AZURE_BICEP_USE_BINARY_FROM_PATH = 'true'
+    environment.DOTNET_CLI_HOME = directory
   } else {
     for (const key of ['HOME', 'USERPROFILE', 'AZURE_CONFIG_DIR']) if (process.env[key]) environment[key] = process.env[key]
   }
@@ -174,6 +349,7 @@ export async function validateGeneratedCode(format: ValidationFormat, code: stri
   try {
     await writeFile(join(directory, plan.fileName), code, { encoding: 'utf8', mode: 0o600 })
     if (format === 'terraform') await writeFile(join(directory, 'terraform.rc'), 'provider_installation {\n  direct {\n    include = ["registry.terraform.io/hashicorp/azurerm"]\n  }\n}\n', { encoding: 'utf8', mode: 0o600 })
+    if (format === 'bicep') await writeFile(join(directory, 'bicepconfig.json'), '{\n  "experimentalFeaturesEnabled": {}\n}\n', { encoding: 'utf8', mode: 0o600 })
     for (const step of plan.steps) {
       try {
         const { stdout, stderr } = await exec(step.command, step.args, {

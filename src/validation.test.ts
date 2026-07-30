@@ -1,6 +1,6 @@
 import { join } from 'node:path'
 import { describe, expect, it } from 'vitest'
-import { validationPlan, validateRequest } from '../server/validation'
+import { validationEnvironment, validationPlan, validateRequest } from '../server/validation'
 
 describe('generated artifact validation planning', () => {
   it('uses fixed executable arguments and never executes generated Azure CLI content', () => {
@@ -16,6 +16,56 @@ describe('generated artifact validation planning', () => {
     expect(plan.steps[1].args).toContain('-input=false')
     expect(plan.steps[1].args).toContain('-get=false')
     expect(plan.steps[2].args).toContain('validate')
+  })
+
+  it('builds Bicep without restoring external artifacts and isolates Azure state', () => {
+    const directory = '/tmp/safe'
+    const plan = validationPlan('bicep', directory)
+    expect(plan.steps).toHaveLength(1)
+    expect(plan.steps[0].args).toContain('--no-restore')
+
+    const environment = validationEnvironment('bicep', directory)
+    expect(environment.HOME).toBe(directory)
+    expect(environment.USERPROFILE).toBe(directory)
+    expect(environment.AZURE_CONFIG_DIR).toBe(join(directory, 'azure'))
+    expect(environment.AZURE_EXTENSION_DIR).toBe(join(directory, 'azure', 'extensions'))
+    expect(environment.AZURE_BICEP_USE_BINARY_FROM_PATH).toBe('true')
+    for (const credential of ['AZURE_CLIENT_ID', 'AZURE_CLIENT_SECRET', 'AZURE_TENANT_ID', 'AZURE_SUBSCRIPTION_ID', 'ARM_CLIENT_ID', 'ARM_CLIENT_SECRET']) {
+      expect(environment[credential]).toBeUndefined()
+    }
+  })
+  it('rejects Bicep modules, tests, extensions, providers, imports, and compile-time file reads', () => {
+    const fileFunctions = ['loadTextContent', 'loadFileAsBase64', 'loadJsonContent', 'loadYamlContent', 'loadDirectoryFileInfo']
+    const rejected = [
+      "module remote 'br/public:avm/res/network/virtual-network:0.1.0' = {}",
+      "module local '../outside.bicep' = {}",
+      'extension microsoftGraphV1_0',
+      'extension kubernetes with {}',
+      "provider 'br:example.azurecr.io/providers/demo:1.0.0'",
+      "import { helper } from 'br:example.azurecr.io/lib:1.0.0'",
+      "test external '../outside.bicep' = {}",
+      ...fileFunctions.flatMap((name) => [
+        `var content = ${name}('../secret')`,
+        `var content = ${name}/* split call */('../secret')`,
+        "var content = '${true ? '${" + name + "('../secret')}' : 'safe'}'",
+      ]),
+    ]
+    for (const code of rejected) {
+      const result = validateRequest({ format: 'bicep', code })
+      expect(result.ok, code).toBe(false)
+    }
+  })
+
+  it('does not treat Bicep policy words in comments or strings as declarations', () => {
+    const fileFunctionText = ['loadTextContent', 'loadFileAsBase64', 'loadJsonContent', 'loadYamlContent', 'loadDirectoryFileInfo']
+      .map((name) => `${name}(ignored)`)
+      .join(' ')
+    const code = `// module fake 'br:example/repo:1.0.0' = {}
+      // loadTextContent('../ignored.txt')
+      /* provider fake */
+      var description = 'module test provider extension import ${fileFunctionText}'
+      var multiline = '''${fileFunctionText}'''`
+    expect(validateRequest({ format: 'bicep', code }).ok).toBe(true)
   })
 
   it('rejects malformed and oversized requests', () => {

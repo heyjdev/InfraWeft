@@ -16,7 +16,7 @@ The application itself does not send design data to a hosted service. User-invok
 
 - Azure import calls the locally installed Azure CLI, which communicates with Microsoft Azure using the user's existing session.
 - `terraform init` may contact the Terraform Registry to download the pinned `hashicorp/azurerm` provider.
-- `az bicep build` may cause Azure CLI to install or update its Bicep component according to Azure CLI behavior and configuration.
+- Bicep validation uses the existing local Bicep binary through Azure CLI with isolated configuration and `--no-restore`. It rejects external modules, test declarations, extensions/providers, imports, and compile-time file reads; if Bicep is unavailable, validation fails rather than installing it.
 - Package installation and update checks contact the configured npm registry.
 
 Generated deployment artifacts may contact cloud services when the user runs them outside this application.

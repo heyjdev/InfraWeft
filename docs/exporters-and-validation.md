@@ -30,10 +30,10 @@ Every configured resource and field must be emitted, represented as an explicit 
 | Format | Local check | Important boundary |
 | --- | --- | --- |
 | Terraform | `terraform fmt`, isolated `terraform init -backend=false`, and `terraform validate` against pinned AzureRM 4.81.0 | No plan or apply; modules, provisioners, other providers, and backends are rejected |
-| Bicep | `az bicep build` | No Azure deployment or what-if |
-| Azure CLI | `bash -n` plus selected CLI/extension availability checks | Generated deployment commands are never executed |
+| Bicep | Isolated `az bicep build --no-restore` using the existing local Bicep binary | Modules, test declarations, extensions/providers, imports, compile-time file reads, Azure credentials, and external artifact restoration are blocked |
+| Azure CLI | `bash -n` | Shell syntax only; generated deployment commands are never executed and Azure CLI availability is not checked |
 
-Validation runs in isolated temporary directories with bounded input and reduced environments. Tool installation can make its own network requests as documented in [PRIVACY.md](../PRIVACY.md).
+Validation runs in isolated temporary directories with bounded input and reduced environments. Terraform provider installation can make its own network requests as documented in [PRIVACY.md](../PRIVACY.md).
 
 ## Bicep scope
 

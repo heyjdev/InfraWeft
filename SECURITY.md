@@ -20,6 +20,7 @@ Include affected versions, reproduction steps, impact, and any suggested mitigat
 - Azure discovery uses fixed read-only Azure CLI argument arrays and the current user's existing Azure CLI session.
 - The application generates and validates artifacts; it does not run Terraform apply, Bicep deployments, or generated Azure CLI deployment scripts.
 - Terraform validation accepts only the pinned `hashicorp/azurerm` provider, rejects modules and provisioners, disables backend/module initialization, uses a restricted provider-installation configuration, and runs with a reduced environment.
+- Bicep validation rejects modules, test declarations, extensions/providers, imports, and compile-time file reads; uses `--no-restore`; and isolates home, Azure CLI configuration, extensions, caches, and Bicep configuration in the temporary validation directory.
 - Designs and snapshots are stored in browser local storage. Secret values are not part of the design model and are supplied only at deployment time.
 
 A process running as the same operating-system user can generally access that user's files, browser profile, terminal output, and CLI credentials. The capability token prevents unrelated local users and unauthenticated local processes from invoking privileged routes, but it does not defend a compromised account or a process that can read the owning user's browser/session data.

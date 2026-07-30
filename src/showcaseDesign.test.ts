@@ -265,6 +265,7 @@ describe('seeded Random showcase design', () => {
     ]) expect(bicep).toContain(resourceType)
     expect(bicep).toContain('@secure()')
     expect(bicep).not.toContain('secret-reference://')
+    expect(validateRequest({ format: 'bicep', code: bicep }).ok).toBe(true)
 
     const cliReport = getExportReport(design.nodes, design.edges, 'azureCli')
     expect(cliReport.unsupported).toEqual([])
