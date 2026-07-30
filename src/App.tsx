@@ -5,6 +5,7 @@ import { Boxes, CircleDot, CloudDownload, Code2, Copy, DoorOpen, Download, Flame
 import './App.css'
 import './design-system.css'
 import infraweftLogo from './assets/logo-wordmark.svg'
+import { apiFetch } from './apiClient'
 import { buildAvnmPlan, defaultAvnmSettings, generateAvnm, type AvnmSettings, type AvnmTopologyChoice } from './avnm'
 import { createSnapshot, diffDesign, LEGACY_CURRENT_DESIGN_STORAGE_KEY, LEGACY_SNAPSHOT_STORAGE_KEY, loadCurrentDesign, loadSnapshots, sanitizeDesign, saveCurrentDesign, saveSnapshot, type DesignSnapshot } from './designState'
 import { generateInfrastructureResult, getExportReport, type ExportFormat } from './generators'
@@ -353,7 +354,7 @@ function Studio() {
     if (!canExport) return
     setValidating(true); setValidationResults([])
     try {
-      const response = await fetch('/api/validate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ format, code: generated }) })
+      const response = await apiFetch('/api/validate', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ format, code: generated }) })
       const body: unknown = await response.json()
       if (body && typeof body === 'object' && 'results' in body && Array.isArray(body.results)) setValidationResults(body.results as Array<{ name: string; status: 'passed' | 'failed'; output: string }>)
       else throw new Error(body && typeof body === 'object' && 'error' in body ? String(body.error) : 'Local validation failed')
@@ -421,12 +422,12 @@ function Studio() {
 
   async function openImport() {
     setImportOpen(true); setLoading(true)
-    try { const response = await fetch('/api/azure/subscriptions'); const body = await response.json(); if (!response.ok) throw new Error(body.error); setSubscriptions(body.subscriptions); setSubscriptionId(body.subscriptions.find((item: any) => item.isDefault)?.id || body.subscriptions[0]?.id || '') }
+    try { const response = await apiFetch('/api/azure/subscriptions'); const body = await response.json(); if (!response.ok) throw new Error(body.error); setSubscriptions(body.subscriptions); setSubscriptionId(body.subscriptions.find((item: any) => item.isDefault)?.id || body.subscriptions[0]?.id || '') }
     catch (error) { setNotice(error instanceof Error ? error.message : 'Azure discovery unavailable') } finally { setLoading(false) }
   }
   async function importTopology() {
     if (!subscriptionId) return; setLoading(true)
-    try { const response = await fetch(`/api/azure/topology?subscriptionId=${encodeURIComponent(subscriptionId)}`); const body: unknown = await response.json(); if (!response.ok) throw new Error((body as { error?: string }).error); const warningCount = body && typeof body === 'object' && 'warnings' in body && Array.isArray(body.warnings) ? body.warnings.length : 0; if (!isNetworkDesign(body)) throw new Error('Azure discovery returned an invalid topology.'); const safeDesign = sanitizeDesign(body); setNodes(safeDesign.nodes); setEdges(safeDesign.edges); setDesignName(safeDesign.name); setBaseline(safeDesign); localStorage.setItem(IMPORTED_BASELINE_KEY, JSON.stringify(safeDesign)); saveCurrentDesign(localStorage, safeDesign); setSelectedId(null); setImportOpen(false); setNotice(`Imported ${safeDesign.nodes.length} Azure resources${warningCount ? ` with ${warningCount} warning${warningCount > 1 ? 's' : ''}` : ''}`) }
+    try { const response = await apiFetch(`/api/azure/topology?subscriptionId=${encodeURIComponent(subscriptionId)}`); const body: unknown = await response.json(); if (!response.ok) throw new Error((body as { error?: string }).error); const warningCount = body && typeof body === 'object' && 'warnings' in body && Array.isArray(body.warnings) ? body.warnings.length : 0; if (!isNetworkDesign(body)) throw new Error('Azure discovery returned an invalid topology.'); const safeDesign = sanitizeDesign(body); setNodes(safeDesign.nodes); setEdges(safeDesign.edges); setDesignName(safeDesign.name); setBaseline(safeDesign); localStorage.setItem(IMPORTED_BASELINE_KEY, JSON.stringify(safeDesign)); saveCurrentDesign(localStorage, safeDesign); setSelectedId(null); setImportOpen(false); setNotice(`Imported ${safeDesign.nodes.length} Azure resources${warningCount ? ` with ${warningCount} warning${warningCount > 1 ? 's' : ''}` : ''}`) }
     catch (error) { setNotice(error instanceof Error ? error.message : 'Import failed') } finally { setLoading(false) }
   }
 

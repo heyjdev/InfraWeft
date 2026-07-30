@@ -29,12 +29,14 @@ npm run build
 npm start
 ```
 
-Open <http://127.0.0.1:8787>. The launcher accepts:
+The launcher opens a private access URL at <http://127.0.0.1:8787>. The launcher accepts:
 
 ```bash
 npm start -- --no-open
 npm start -- --port 9000
 ```
+
+`--no-open` prints the private access URL instead. Use the complete URL, including its fragment, and do not share it. InfraWeft stores the capability token only in the browser tab's session storage and removes it from the address bar. Opening the bare loopback URL does not authorize Azure discovery or local validation.
 
 Only use a loopback port. Do not reverse-proxy InfraWeft to a network-accessible interface.
 
@@ -65,7 +67,7 @@ npm ci
 npm run dev
 ```
 
-Open <http://127.0.0.1:5173>. Vite proxies `/api` to `127.0.0.1:8787`.
+Open the private development URL printed by the **API** process; it starts with <http://127.0.0.1:5173>. Vite proxies `/api` to `127.0.0.1:8787`.
 
 ## Azure import prerequisites
 

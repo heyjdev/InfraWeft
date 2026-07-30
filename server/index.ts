@@ -1,20 +1,22 @@
 import express from 'express'
 import { execFile } from 'node:child_process'
+import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import type { Server } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { promisify } from 'node:util'
 import { validateGeneratedCode, validateRequest } from './validation.js'
+import { API_TOKEN_FRAGMENT, API_TOKEN_HEADER } from '../shared/access.js'
 
 const exec = promisify(execFile)
 const DEFAULT_PORT = 8787
 const packageRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..')
 
-type AppOptions = { port?: number; serveUi?: boolean; uiDirectory?: string }
-type StartOptions = AppOptions & { host?: '127.0.0.1' }
+type AppOptions = { port?: number; serveUi?: boolean; uiDirectory?: string; apiToken: string }
+type StartOptions = Omit<AppOptions, 'apiToken'> & { host?: '127.0.0.1'; apiToken?: string }
 
-export function createApp(options: AppOptions = {}) {
+export function createApp(options: AppOptions) {
   const app = express()
   const port = options.port ?? Number(process.env.API_PORT || DEFAULT_PORT)
   const uiDirectory = options.uiDirectory ?? join(packageRoot, 'dist')
@@ -30,6 +32,15 @@ export function createApp(options: AppOptions = {}) {
   const discoveryInFlight = new Map<string, Promise<unknown>>()
   let privilegedRequests: number[] = []
 
+  if (typeof options.apiToken !== 'string' || Buffer.byteLength(options.apiToken, 'utf8') < 32) throw new Error('A strong local API access token is required.')
+  const expectedToken = Buffer.from(options.apiToken)
+
+  function hasValidApiToken(value: string | undefined) {
+    if (!value) return false
+    const suppliedToken = Buffer.from(value)
+    return suppliedToken.length === expectedToken.length && timingSafeEqual(suppliedToken, expectedToken)
+  }
+
   app.disable('x-powered-by')
   app.use((req, res, next) => {
     const origin = req.get('origin')
@@ -42,7 +53,10 @@ export function createApp(options: AppOptions = {}) {
       'X-Content-Type-Options': 'nosniff',
       'X-Frame-Options': 'DENY',
     })
-    if (req.path.startsWith('/api/azure/') || req.path === '/api/validate') {
+    const normalizedPath = (req.path.toLowerCase().replace(/\/+$/, '') || '/')
+    const privilegedRequest = normalizedPath === '/api/validate' || normalizedPath === '/api/azure' || normalizedPath.startsWith('/api/azure/')
+    if (privilegedRequest) {
+      if (!hasValidApiToken(req.get(API_TOKEN_HEADER))) return res.status(401).json({ error: 'A valid local access token is required.' })
       const now = Date.now()
       privilegedRequests = privilegedRequests.filter((timestamp) => timestamp > now - 60_000)
       if (privilegedRequests.length >= 30) return res.status(429).json({ error: 'Too many privileged requests. Retry in one minute.' })
@@ -146,20 +160,25 @@ export function createApp(options: AppOptions = {}) {
   return app
 }
 
-export async function startServer(options: StartOptions = {}): Promise<{ server: Server; url: string }> {
+export async function startServer(options: StartOptions = {}): Promise<{ server: Server; url: string; accessUrl: string }> {
   const port = options.port ?? Number(process.env.API_PORT || DEFAULT_PORT)
   const host = options.host ?? '127.0.0.1'
-  const app = createApp({ ...options, port })
+  const apiToken = options.apiToken ?? randomBytes(32).toString('base64url')
+  const app = createApp({ ...options, apiToken, port })
   const server = await new Promise<Server>((resolveServer, reject) => {
     const instance = app.listen(port, host, () => resolveServer(instance))
     instance.once('error', reject)
   })
-  return { server, url: `http://${host}:${port}` }
+  const url = `http://${host}:${port}`
+  return { server, url, accessUrl: `${url}/#${API_TOKEN_FRAGMENT}=${encodeURIComponent(apiToken)}` }
 }
 
 const entryPath = process.argv[1] ? resolve(process.argv[1]) : ''
 if (entryPath === fileURLToPath(import.meta.url)) {
-  startServer({ serveUi: false }).then(({ url }) => console.log(`InfraWeft API listening on ${url}`)).catch((error) => {
+  startServer({ serveUi: false }).then(({ url, accessUrl }) => {
+    console.log(`InfraWeft API listening on ${url}`)
+    console.log(`Open the development UI with this private access fragment: ${accessUrl.replace(`${url}/`, 'http://127.0.0.1:5173/')}`)
+  }).catch((error) => {
     console.error(error instanceof Error ? error.message : error)
     process.exitCode = 1
   })

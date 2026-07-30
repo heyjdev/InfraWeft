@@ -16,9 +16,10 @@ Include affected versions, reproduction steps, impact, and any suggested mitigat
 ## Security boundaries
 
 - The application binds to `127.0.0.1` and is not intended to be exposed to a LAN or the internet.
+- Azure discovery and local validation require a cryptographically random per-launch capability token. The launcher transfers it through a private temporary bootstrap file or, with `--no-open`, prints a private URL to the local terminal. The browser removes the token fragment from the address bar and keeps it in tab-scoped session storage.
 - Azure discovery uses fixed read-only Azure CLI argument arrays and the current user's existing Azure CLI session.
 - The application generates and validates artifacts; it does not run Terraform apply, Bicep deployments, or generated Azure CLI deployment scripts.
 - Terraform validation accepts only the pinned `hashicorp/azurerm` provider, rejects modules and provisioners, disables backend/module initialization, uses a restricted provider-installation configuration, and runs with a reduced environment.
 - Designs and snapshots are stored in browser local storage. Secret values are not part of the design model and are supplied only at deployment time.
 
-A process already running as the same operating-system user can generally access that user's files, browser profile, and CLI credentials. Loopback restrictions do not defend against a fully compromised local account.
+A process running as the same operating-system user can generally access that user's files, browser profile, terminal output, and CLI credentials. The capability token prevents unrelated local users and unauthenticated local processes from invoking privileged routes, but it does not defend a compromised account or a process that can read the owning user's browser/session data.

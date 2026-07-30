@@ -53,11 +53,13 @@ npm run build
 npm start
 ```
 
-Open <http://127.0.0.1:8787>. To avoid opening a browser automatically:
+The launcher opens a private, token-bearing browser session at <http://127.0.0.1:8787>. To avoid opening a browser automatically:
 
 ```bash
 npm start -- --no-open
 ```
+
+`--no-open` prints a private access URL. The launcher also prints that URL if automatic browser opening fails. Open the exact URL and do not share it; the fragment is removed from the address bar after InfraWeft stores the token in that tab's session storage.
 
 Check workstation capabilities with:
 
@@ -89,7 +91,7 @@ See [Exporters and validation](docs/exporters-and-validation.md) for the capabil
 
 InfraWeft has no application telemetry, advertising, or hosted account service. Local records may still contain sensitive infrastructure metadata such as subscription IDs, resource IDs, names, CIDRs, and topology. Treat browser profiles, screenshots, and exported designs accordingly.
 
-The loopback API validates Host and Origin headers, rate-limits expensive operations, bounds validation inputs, executes fixed tool argument arrays, and never executes generated deployment commands. Read [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md) before using real subscription data.
+The loopback API requires a cryptographically random per-launch capability token for Azure discovery and local validation. It also validates Host and Origin headers, rate-limits expensive operations, bounds validation inputs, executes fixed tool argument arrays, and never executes generated deployment commands. Read [PRIVACY.md](PRIVACY.md) and [SECURITY.md](SECURITY.md) before using real subscription data.
 
 ## Documentation
 
@@ -111,7 +113,7 @@ npm ci
 npm run dev
 ```
 
-The UI runs at <http://127.0.0.1:5173> and proxies `/api` to the loopback API at `127.0.0.1:8787`.
+Open the private development URL printed by the **API** process; it starts with <http://127.0.0.1:5173>. Vite proxies `/api` to the loopback API at `127.0.0.1:8787`.
 
 Required checks:
 

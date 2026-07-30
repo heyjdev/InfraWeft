@@ -1,6 +1,10 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from 'node:child_process'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import process from 'node:process'
+import { pathToFileURL } from 'node:url'
 import { startServer } from '../dist-server/index.mjs'
 
 const args = process.argv.slice(2)
@@ -32,12 +36,37 @@ function parsePort() {
   return port
 }
 
-function openBrowser(url) {
+async function openBrowser(url) {
+  const launcherDirectory = await mkdtemp(join(tmpdir(), 'infraweft-launch-'))
+  const launcherPath = join(launcherDirectory, 'open.html')
+  const document = `<!doctype html><meta charset="utf-8"><meta name="referrer" content="no-referrer"><title>Opening InfraWeft</title><script>location.replace(${JSON.stringify(url)})</script>`
+  await writeFile(launcherPath, document, { encoding: 'utf8', mode: 0o600 })
   const command = process.platform === 'darwin' ? 'open' : process.platform === 'win32' ? 'cmd' : 'xdg-open'
-  const openArgs = process.platform === 'win32' ? ['/d', '/s', '/c', 'start', '', url] : [url]
-  const child = spawn(command, openArgs, { detached: true, stdio: 'ignore', windowsHide: true })
-  child.on('error', () => {})
+  const launcherUrl = pathToFileURL(launcherPath).href
+  const openArgs = process.platform === 'win32' ? ['/d', '/s', '/c', 'start', '', launcherUrl] : [launcherUrl]
+  let child
+  try {
+    child = spawn(command, openArgs, { detached: true, stdio: 'ignore', windowsHide: true })
+  } catch {
+    await rm(launcherDirectory, { recursive: true, force: true })
+    return false
+  }
+  const opened = await new Promise((resolve) => {
+    let settled = false
+    const finish = (result) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(result)
+    }
+    const timer = setTimeout(() => finish(true), 2_000)
+    child.once('error', () => finish(false))
+    child.once('exit', (code) => finish(code === 0))
+  })
   child.unref()
+  if (!opened) await rm(launcherDirectory, { recursive: true, force: true })
+  else setTimeout(() => void rm(launcherDirectory, { recursive: true, force: true }), 60_000).unref()
+  return opened
 }
 
 if (args[0] === 'doctor' || args.includes('--doctor')) {
@@ -51,10 +80,14 @@ if (args[0] === 'doctor' || args.includes('--doctor')) {
   }
   try {
     const port = parsePort()
-    const { server, url } = await startServer({ port, serveUi: true })
+    const { server, url, accessUrl } = await startServer({ port, serveUi: true })
     console.log(`InfraWeft is running at ${url}`)
     console.log('Designs stay in this browser profile. Press Ctrl+C to stop.')
-    if (!args.includes('--no-open') && !process.env.CI) openBrowser(url)
+    if (args.includes('--no-open') || process.env.CI) console.log(`Private access URL: ${accessUrl}`)
+    else if (!await openBrowser(accessUrl)) {
+      console.error('InfraWeft could not open a browser automatically. Open the private access URL below:')
+      console.log(`Private access URL: ${accessUrl}`)
+    }
     const stop = () => server.close(() => process.exit(0))
     process.once('SIGINT', stop)
     process.once('SIGTERM', stop)

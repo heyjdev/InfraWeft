@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Private repository governance, CI, dependency automation, security and privacy policies, and contribution templates.
 - User documentation, screenshots, and an animated README demonstration.
+- Per-launch capability authorization for Azure discovery and local artifact validation.
 
 ### Changed
 

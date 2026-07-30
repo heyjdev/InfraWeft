@@ -62,6 +62,16 @@ async function waitFor(url, timeoutMs = 20_000) {
   throw lastError ?? new Error(`Timed out waiting for ${url}`)
 }
 
+async function waitForOutput(pattern, readOutput, timeoutMs = 20_000) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    const match = readOutput().match(pattern)
+    if (match) return match
+    await new Promise((resolve) => setTimeout(resolve, 50))
+  }
+  throw new Error('Timed out waiting for packaged launcher output')
+}
+
 try {
   const packed = runNpm(['pack', '--silent', '--json', '--pack-destination', temporary], { cwd: root, encoding: 'utf8', timeout: 180_000 })
   if (packed.status !== 0) throw new Error(packed.stderr || packed.stdout || 'npm pack failed')
@@ -84,6 +94,14 @@ try {
   const health = await waitFor(`http://127.0.0.1:${port}/api/health`)
   const body = await health.json()
   if (body.ok !== true) throw new Error('Packaged health endpoint returned an unexpected body')
+  const accessMatch = await waitForOutput(/Private access URL: (\S+)/, () => output)
+  const accessUrl = new URL(accessMatch[1])
+  const apiToken = new URLSearchParams(accessUrl.hash.slice(1)).get('infraweft-token')
+  if (!apiToken || apiToken.length < 40) throw new Error('Packaged launcher did not generate a strong access token')
+  const unauthorized = await fetch(`http://127.0.0.1:${port}/api/validate`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })
+  if (unauthorized.status !== 401) throw new Error(`Privileged API accepted an unauthenticated request: HTTP ${unauthorized.status}`)
+  const authorized = await fetch(`http://127.0.0.1:${port}/api/validate`, { method: 'POST', headers: { 'content-type': 'application/json', 'x-infraweft-token': apiToken }, body: '{}' })
+  if (authorized.status !== 400) throw new Error(`Privileged API rejected its launch token unexpectedly: HTTP ${authorized.status}`)
   const page = await (await waitFor(`http://127.0.0.1:${port}/`)).text()
   if (!page.includes('<div id="root"></div>')) throw new Error('Packaged UI was not served')
   await stopChild()

@@ -6,7 +6,7 @@ This application is local-first. It has no application telemetry, advertising, o
 
 The browser stores the current design, imported comparison baseline, showcase settings, and up to 20 snapshots in local storage for the application's loopback origin. These records may contain cloud subscription IDs, resource IDs, resource names, network ranges, and topology. Treat exported browser profiles and backups as sensitive infrastructure metadata.
 
-Secret values are not stored in designs or snapshots. RADIUS secrets are represented only as deployment-time intent; generated Terraform and Bicep use sensitive inputs, and generated Azure CLI scripts require an environment variable.
+Secret values are not stored in designs or snapshots. RADIUS secrets are represented only as deployment-time intent; generated Terraform and Bicep use sensitive inputs, and generated Azure CLI scripts require an environment variable. The per-launch local API token is kept in tab-scoped browser session storage and is not included in designs, snapshots, or application telemetry.
 
 Clearing the design removes the current design and imported baseline. Browser site-data controls can remove all application data, including snapshots and preferences.
 
