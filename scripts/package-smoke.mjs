@@ -18,10 +18,18 @@ async function stopChild() {
   if (!child || child.exitCode !== null) return
   const processToStop = child
   const closed = new Promise((resolve) => processToStop.once('close', resolve))
-  processToStop.kill('SIGTERM')
+  if (process.platform === 'win32' && processToStop.pid) {
+    spawnSync('taskkill', ['/pid', String(processToStop.pid), '/T', '/F'], { stdio: 'ignore' })
+  } else {
+    processToStop.kill('SIGTERM')
+  }
   await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 5_000))])
   if (processToStop.exitCode === null) {
-    processToStop.kill('SIGKILL')
+    if (process.platform === 'win32' && processToStop.pid) {
+      spawnSync('taskkill', ['/pid', String(processToStop.pid), '/T', '/F'], { stdio: 'ignore' })
+    } else {
+      processToStop.kill('SIGKILL')
+    }
     await Promise.race([closed, new Promise((resolve) => setTimeout(resolve, 5_000))])
   }
   child = undefined
@@ -68,8 +76,8 @@ try {
   const packageJson = JSON.parse(await readFile(join(packageDirectory, 'package.json'), 'utf8'))
   if (!packageJson.bin?.infraweft) throw new Error('Packed package has no CLI bin entry')
   const port = await freePort()
-  const packageEntrypoint = join(packageDirectory, packageJson.bin.infraweft)
-  child = spawn(process.execPath, [packageEntrypoint, '--no-open', '--port', String(port)], { cwd: installDirectory, stdio: ['ignore', 'pipe', 'pipe'] })
+  const executable = join(installDirectory, 'node_modules', '.bin', process.platform === 'win32' ? 'infraweft.cmd' : 'infraweft')
+  child = spawn(executable, ['--no-open', '--port', String(port)], { cwd: installDirectory, stdio: ['ignore', 'pipe', 'pipe'], shell: process.platform === 'win32' })
   let output = ''
   child.stdout.on('data', (chunk) => { output += chunk })
   child.stderr.on('data', (chunk) => { output += chunk })
