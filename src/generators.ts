@@ -55,8 +55,40 @@ const ends = (edge: NetworkEdge, nodes: NetworkNode[], left: NetworkNode['data']
 }
 
 export type ExportFormat = ExportTarget
-export type ExportDiagnostic = { node: NetworkNode; reason: string }
+export type ExportDiagnostic = { node: NetworkNode; reason: string; field?: string }
 export type ExportReport = { supported: NetworkNode[]; unsupported: ExportDiagnostic[] }
+
+function diagnosticPropertyField(reason: string) {
+  const configuredField = reason.match(/^Configured field ([A-Za-z0-9_]+)/)?.[1]
+  if (configuredField) return configuredField
+  const requiredBlock = reason.match(/^At least one ([A-Za-z0-9_]+) block/)?.[1]
+  if (requiredBlock) return requiredBlock
+  const patterns: Array<[RegExp, string]> = [
+    [/Bicep export currently requires every managed resource to use one resource group/i, 'resourceGroup'],
+    [/Address space is required|subnet address prefix|subnet prefix/i, 'addressSpaces'],
+    [/Parent virtual network/i, 'parentVnetId'],
+    [/Idle timeout/i, 'idle_timeout_in_minutes'],
+    [/Front Door SKU/i, 'sku_name'],
+    [/Structured SKU|SKU capacity|autoscale configuration/i, 'sku'],
+    [/Application Gateway frontend/i, 'frontend_ip_configuration'],
+    [/Application Gateway listener|HTTPS listeners/i, 'http_listener'],
+    [/Application Gateway routing rule|PathBasedRouting/i, 'request_routing_rule'],
+    [/Application Gateway WAF/i, 'waf_configuration'],
+    [/firewall management configuration/i, 'management_ip_configuration'],
+    [/Firewall IP configuration|Azure Firewall IP configuration|firewall export requires each VNet IP configuration|AZFW_VNet requires/i, 'ip_configuration'],
+    [/gateway IP configuration|explicit Public IP|custom gateway IP configuration names|GatewaySubnet references/i, 'ip_configuration'],
+    [/gateway export currently supports VPN gateways/i, 'type'],
+    [/active-active mode/i, 'active_active'],
+    [/PolicyBased VPN Gateway/i, 'vpn_type'],
+    [/RADIUS|point-to-site authentication/i, 'vpn_client_configuration'],
+    [/Load Balancer frontend|explicit frontend IP configuration/i, 'frontend_ip_configuration'],
+    [/load-balancing rule|Load Balancer rules|backend pool reference|probe reference|rule idle timeout/i, 'rule'],
+    [/Load Balancer SKU-tier/i, 'sku_tier'],
+    [/Endpoint subnet/i, 'subnet_id'],
+    [/private service connection|private-endpoint create|private endpoints require/i, 'private_service_connection'],
+  ]
+  return patterns.find(([pattern]) => pattern.test(reason))?.[1]
+}
 
 function attachedParent(node: NetworkNode, nodes: NetworkNode[], edges: NetworkEdge[]) {
   if (node.data.parentVnetId) return nodes.find((candidate) => candidate.id === node.data.parentVnetId && candidate.data.kind === 'vnet')
@@ -238,7 +270,7 @@ export function getExportReport(nodes: NetworkNode[], edges: NetworkEdge[], form
   for (const node of nodes) {
     const capability = RESOURCE_SCHEMAS[node.data.kind].export[format]
     const reason = capability.status === 'unsupported' ? capability.summary : format === 'bicep' && bicepGroups.size > 1 ? 'Bicep export currently requires every managed resource to use one resource group.' : configurationProblem(node, nodes, edges, format)
-    if (reason) report.unsupported.push({ node, reason })
+    if (reason) report.unsupported.push({ node, reason, field: diagnosticPropertyField(reason) })
     else report.supported.push(node)
   }
   return report

@@ -67,6 +67,7 @@ Open **Generate** and select Terraform, Bicep, Azure CLI, or Azure Virtual Netwo
 InfraWeft shows:
 
 - whole-design capability and exact blockers;
+- blocker links that select the affected resource, scroll its Properties panel to the relevant control, focus it, and briefly highlight it;
 - generated output for diagnosis when partial rendering is safe;
 - field-to-code links from properties to generated lines;
 - node selection from generated resource blocks; and

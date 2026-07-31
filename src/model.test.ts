@@ -202,6 +202,26 @@ describe('code generation', () => {
     expect(report.supported).toEqual([])
     expect(report.unsupported.every(({ reason }) => reason.includes('one resource group'))).toBe(true)
   })
+  it('points export diagnostics at the property control that can resolve them', () => {
+    const vnet: NetworkNode = { id: 'empty-vnet', type: 'azureResource', position: { x: 0, y: 0 }, data: { ...defaultNodeData('vnet'), label: 'empty-vnet', addressSpace: '', addressSpaces: [] } }
+    expect(getExportReport([vnet], [], 'terraform').unsupported[0]).toMatchObject({ field: 'addressSpaces' })
+
+    const nat: NetworkNode = { id: 'nat', type: 'azureResource', position: { x: 0, y: 0 }, data: { ...defaultNodeData('natGateway'), label: 'nat', idle_timeout_in_minutes: 121 } }
+    expect(getExportReport([nat], [], 'terraform').unsupported[0]).toMatchObject({ field: 'idle_timeout_in_minutes' })
+
+    const appGateway: NetworkNode = { id: 'appgw', type: 'azureResource', position: { x: 0, y: 0 }, data: { ...defaultNodeData('appGateway'), label: 'appgw', gateway_ip_configuration: [] } }
+    expect(getExportReport([appGateway], [], 'terraform').unsupported[0]).toMatchObject({ field: 'gateway_ip_configuration' })
+
+    const groups = structuredClone(starterDesign.nodes.filter((node) => node.data.kind === 'vnet'))
+    expect(getExportReport(groups, [], 'bicep').unsupported.every(({ field }) => field === 'resourceGroup')).toBe(true)
+
+    const endpoint: NetworkNode = { id: 'endpoint', type: 'azureResource', position: { x: 0, y: 0 }, data: { ...defaultNodeData('privateEndpoint'), label: 'endpoint', subnet_id: '' } }
+    expect(getExportReport([endpoint], [], 'terraform').unsupported[0]).toMatchObject({ field: 'subnet_id' })
+
+    const configured = structuredClone(starterDesign.nodes[0])
+    configured.data.dns_servers = ['10.0.0.4']
+    expect(getExportReport([configured], [], 'terraform').unsupported[0]).toMatchObject({ field: 'dns_servers' })
+  })
   it('uses collision-resistant deterministic symbols', () => {
     const nodes = structuredClone(starterDesign.nodes)
     nodes[2].data.label = 'vnet_hub_prod'
