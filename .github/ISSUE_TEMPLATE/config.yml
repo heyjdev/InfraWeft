@@ -2,7 +2,7 @@ blank_issues_enabled: false
 contact_links:
   - name: Security vulnerability
     url: https://github.com/heyjdev/InfraWeft/security/advisories/new
-    about: Report vulnerabilities confidentially. The form becomes active when the repository is public.
+    about: Report vulnerabilities confidentially. The form becomes active after private reporting is enabled during public cutover.
   - name: Usage and support
     url: https://github.com/heyjdev/InfraWeft/blob/main/SUPPORT.md
     about: Check supported workflows and troubleshooting guidance before filing an issue.

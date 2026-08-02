@@ -30,6 +30,8 @@ Run this as one controlled operation. Do not announce the repository between ste
 9. Review the public README, screenshots, topics, issue forms, and package metadata from a signed-out browser.
 10. Only then announce the repository or publish the npm package.
 
+The script pins GitHub REST API version `2026-03-10`, creates or updates the named ruleset, and fails unless every requested control is verified after application.
+
 ## Controls applied by the script
 
 - GitHub private vulnerability reporting
