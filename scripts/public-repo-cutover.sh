@@ -21,7 +21,8 @@ gh auth status >/dev/null
 is_private="$(gh_api "repos/${repo}" --jq '.private')"
 
 verify_public_controls() {
-  local security_states codeql_state ruleset_id enforcement status_count pull_request_count
+  local security_states codeql_state actions_policy selected_actions_policy
+  local ruleset_id enforcement status_count pull_request_count
 
   gh_api --silent "repos/${repo}/private-vulnerability-reporting"
 
@@ -34,6 +35,18 @@ verify_public_controls() {
   codeql_state="$(gh_api "repos/${repo}/code-scanning/default-setup" --jq '.state')"
   if [[ "$codeql_state" != "configured" ]]; then
     printf 'CodeQL default setup is not configured: %s\n' "$codeql_state" >&2
+    return 1
+  fi
+
+  actions_policy="$(gh_api "repos/${repo}/actions/permissions" --jq '[.enabled, .allowed_actions, .sha_pinning_required] | @tsv')"
+  if [[ "$actions_policy" != $'true\tselected\ttrue' ]]; then
+    printf 'Actions policy verification failed: %s\n' "$actions_policy" >&2
+    return 1
+  fi
+
+  selected_actions_policy="$(gh_api "repos/${repo}/actions/permissions/selected-actions" --jq '[.github_owned_allowed, .verified_allowed, (.patterns_allowed | length)] | @tsv')"
+  if [[ "$selected_actions_policy" != $'true\tfalse\t0' ]]; then
+    printf 'Actions allowlist verification failed: %s\n' "$selected_actions_policy" >&2
     return 1
   fi
 
@@ -56,6 +69,7 @@ verify_public_controls() {
   printf 'private_vulnerability_reporting=enabled\n'
   printf 'secret_scanning=enabled push_protection=enabled\n'
   printf 'codeql_default_setup=configured\n'
+  printf 'actions=enabled allowlist=github-owned-only sha_pinning=required\n'
   printf 'ruleset=%s enforcement=active required_checks=10 pull_request_rules=1\n' "$ruleset_id"
 }
 
@@ -94,6 +108,22 @@ gh_api --method PATCH "repos/${repo}/code-scanning/default-setup" --input - --si
 {
   "state": "configured",
   "query_suite": "default"
+}
+JSON
+
+gh_api --method PUT "repos/${repo}/actions/permissions" --input - --silent <<'JSON'
+{
+  "enabled": true,
+  "allowed_actions": "selected",
+  "sha_pinning_required": true
+}
+JSON
+
+gh_api --method PUT "repos/${repo}/actions/permissions/selected-actions" --input - --silent <<'JSON'
+{
+  "github_owned_allowed": true,
+  "verified_allowed": false,
+  "patterns_allowed": []
 }
 JSON
 
