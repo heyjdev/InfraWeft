@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { addEdge, Background, Controls, Handle, MarkerType, MiniMap, Position, ReactFlow, ReactFlowProvider, useEdgesState, useNodesState, useReactFlow, type Connection, type NodeProps } from '@xyflow/react'
 import '@xyflow/react/dist/style.css'
-import { Boxes, CircleDot, CloudDownload, Code2, Copy, DoorOpen, Download, Flame, PanelsTopLeft, GitBranch, Globe2, History, Layers3, Menu, Network, Play, Plus, RotateCcw, Router, Save, Search, ShieldCheck, Trash2, WandSparkles, X, Zap } from 'lucide-react'
+import { Boxes, Calculator, CircleDot, CloudDownload, Code2, Copy, DoorOpen, Download, Flame, PanelsTopLeft, GitBranch, Globe2, History, Layers3, Menu, Network, Play, Plus, RotateCcw, Router, Save, Search, ShieldCheck, Trash2, WandSparkles, X, Zap } from 'lucide-react'
 import './App.css'
 import './design-system.css'
 import infraweftLogo from './assets/logo-wordmark.svg'
@@ -11,6 +11,7 @@ import { createSnapshot, diffDesign, LEGACY_CURRENT_DESIGN_STORAGE_KEY, LEGACY_S
 import { generateInfrastructureResult, getExportReport, type ExportFormat } from './generators'
 import { ASSOCIATION_LABELS, AZURE_REGIONS, associationKindFor, attachSubnetToVnet, createAttachedResource, defaultNodeData, getAttachableChildKinds, isNetworkDesign, nodesOverlap, RESOURCE_LABELS, RESOURCE_SCHEMAS, validateDesign, type NetworkEdge, type NetworkNode, type NetworkNodeData, type ResourceField, type ResourceKind } from './model'
 import { createShowcaseDesign, DEFAULT_SHOWCASE_SELECTION, getShowcaseLayoutProfile, getShowcaseMinimums, getShowcaseRequirements, normalizeShowcaseSelection, randomizeShowcaseSelection, SHOWCASE_PRESETS, type ShowcaseComplexity, type ShowcaseSelection } from './showcaseDesign'
+import SubnetCalculatorPage from './SubnetCalculatorPage'
 
 const iconMap: Record<ResourceKind, typeof Network> = { vnet: Network, subnet: Boxes, appGateway: PanelsTopLeft, natGateway: Router, firewall: Flame, vpnGateway: ShieldCheck, loadBalancer: GitBranch, privateEndpoint: CircleDot, frontDoor: DoorOpen, publicIp: CircleDot, networkSecurityGroup: ShieldCheck, routeTable: GitBranch }
 const colors: Record<ResourceKind, string> = { vnet: '#1f7bff', subnet: '#7b52f5', appGateway: '#2adfdc', natGateway: '#10c1c0', firewall: '#ef3f47', vpnGateway: '#2adfdc', loadBalancer: '#16b877', privateEndpoint: '#9d7bff', frontDoor: '#4a95ff', publicIp: '#2adfdc', networkSecurityGroup: '#ff6b70', routeTable: '#f6b845' }
@@ -106,7 +107,7 @@ function Studio() {
   const [format, setFormat] = useState<ExportFormat>('terraform')
   const [deploymentModel, setDeploymentModel] = useState<'resources' | 'avnm'>('resources')
   const [avnmSettings, setAvnmSettings] = useState<AvnmSettings>(defaultAvnmSettings)
-  const [mode, setMode] = useState<'design' | 'code'>('design')
+  const [mode, setMode] = useState<'design' | 'code' | 'subnet'>('design')
   const [notice, setNotice] = useState('Ready')
   const [saveStatus, setSaveStatus] = useState<'saving' | 'saved' | 'error'>('saved')
   const [importOpen, setImportOpen] = useState(false)
@@ -436,10 +437,10 @@ function Studio() {
   return <div className="app-shell">
     <header className="topbar">
       <div className="brand"><img src={infraweftLogo} alt="InfraWeft"/><span>Azure · Networking</span></div>
-      <nav><button className={mode === 'design' ? 'active' : ''} onClick={() => setMode('design')}><WandSparkles size={15}/> Design</button><button className={mode === 'code' ? 'active' : ''} onClick={() => setMode('code')}><Code2 size={15}/> Generate</button></nav>
-      <div className="top-actions"><span className={`status ${issues.length ? 'warning' : ''}`}>{issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : notice}</span><span className={`status ${saveStatus === 'error' ? 'warning' : ''}`}>{saveStatus === 'saving' ? 'Saving…' : saveStatus === 'error' ? 'Save failed' : 'Saved locally'}</span><button className="showcase-action" onClick={openShowcase}><WandSparkles size={16}/> Random showcase</button><button className="ghost clear-action" onClick={() => setClearOpen(true)} disabled={!nodes.length && !edges.length}><Trash2 size={16}/> Clear</button><button className="ghost" onClick={() => setHistoryOpen(true)}><History size={16}/> History</button><button className="ghost" onClick={save}><Save size={16}/> Save</button><button className="primary" onClick={openImport}><CloudDownload size={16}/> Import Azure</button></div>
+      <nav><button className={mode === 'design' ? 'active' : ''} onClick={() => setMode('design')}><WandSparkles size={15}/> Design</button><button className={mode === 'code' ? 'active' : ''} onClick={() => setMode('code')}><Code2 size={15}/> Generate</button><button className={mode === 'subnet' ? 'active' : ''} onClick={() => setMode('subnet')}><Calculator size={15}/> Subnet calculator</button></nav>
+      {mode === 'subnet' ? <div className="top-actions calculator-context"><span className="status">Azure IPv4 planning</span><span className="status">Local only</span></div> : <div className="top-actions"><span className={`status ${issues.length ? 'warning' : ''}`}>{issues.length ? `${issues.length} issue${issues.length > 1 ? 's' : ''}` : notice}</span><span className={`status ${saveStatus === 'error' ? 'warning' : ''}`}>{saveStatus === 'saving' ? 'Saving…' : saveStatus === 'error' ? 'Save failed' : 'Saved locally'}</span><button className="showcase-action" onClick={openShowcase}><WandSparkles size={16}/> Random showcase</button><button className="ghost clear-action" onClick={() => setClearOpen(true)} disabled={!nodes.length && !edges.length}><Trash2 size={16}/> Clear</button><button className="ghost" onClick={() => setHistoryOpen(true)}><History size={16}/> History</button><button className="ghost" onClick={save}><Save size={16}/> Save</button><button className="primary" onClick={openImport}><CloudDownload size={16}/> Import Azure</button></div>}
     </header>
-    <main>
+    <main className={mode === 'subnet' ? 'calculator-mode' : ''}>
       <aside className="palette-panel">
         <div className="panel-title"><span>Components</span><button title="Collapse"><Menu size={16}/></button></div>
         <label className="search"><Search size={15}/><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="Find a resource"/></label>
@@ -447,6 +448,7 @@ function Studio() {
         <div className="hint"><Zap size={16}/><div><strong>Quick connect</strong><p>Drag between node handles. Overlapping VNets are blocked.</p></div></div>
       </aside>
       <section className="workspace">
+        {mode === 'subnet' ? <SubnetCalculatorPage/> : <>
         <div className="workspace-bar"><div><Globe2 size={15}/><strong>{currentDesign.name}</strong><span>eastus</span></div>{baseline && <div className="diff-summary" title="Changes from imported Azure baseline"><span className="created">+{designDiff.summary.created}</span><span className="modified">~{designDiff.summary.modified}</span><span className="deleted">−{designDiff.summary.deleted}</span><span>{designDiff.summary.unchanged} unchanged</span>{nodes.some((node) => node.data.imported) && <button onClick={adoptImportedDesign}>Adopt for management</button>}</div>}<div className="legend"><span><i className="dot imported"/> Imported</span><span><i className="line"/> Peering</span></div></div>
         {mode === 'design' ? <ReactFlow nodes={displayedNodes} edges={edges} onNodesChange={onNodesChange} onEdgesChange={onEdgesChange} onConnect={onConnect} nodeTypes={nodeTypes} onNodeClick={(_, node) => { setSelectedId(node.id); setChildMenuId(null) }} onPaneClick={() => { setSelectedId(null); setChildMenuId(null) }} fitView minZoom={0.25} maxZoom={1.8} deleteKeyCode={null}>
           <Background color="rgba(120,140,180,.09)" gap={26}/><MiniMap nodeColor={(node) => colors[(node.data as NetworkNodeData).kind]} maskColor="rgba(7,9,16,.76)"/><Controls position="bottom-center" />
@@ -465,6 +467,7 @@ function Studio() {
             </div>
           })}</div>
         </div>}
+        </>}
       </section>
       <aside className="inspector-panel">
         <div className="panel-title"><span>Properties</span>{selected && <button onClick={() => setSelectedId(null)}><X size={16}/></button>}</div>
