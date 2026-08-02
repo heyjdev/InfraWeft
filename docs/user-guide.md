@@ -9,6 +9,8 @@ The workspace has four primary areas:
 - **Properties** — selected-resource identity, deployment scope, configuration, and validation.
 - **Generate** — exporter selection, diagnostics, field-to-code navigation, validation, copy, and download.
 
+The header also exposes a separate **Subnet calculator** page for address-space planning.
+
 ## Build a topology
 
 Drag a component onto the canvas, then select it to configure provider-facing names, location, resource group, lifecycle, and resource-specific fields. Subnets inherit scope from their parent VNet. Typed relationships represent deployment semantics; ordinary visual proximity does not.
@@ -29,6 +31,18 @@ Current typed deployment relationships are:
 | Application Gateway ↔ Public IP | Public frontend configuration |
 
 Generic attachment edges are not substitutes for these typed deployment semantics.
+
+## Plan subnet ranges
+
+Open **Subnet calculator** and enter a canonical IPv4 CIDR such as `10.40.0.0/16`. The calculator shows the complete address range, dotted-decimal netmask, total addresses, and Azure-usable capacity. Azure reserves the first four and final address in every subnet, so repeated splits reduce aggregate usable capacity by five addresses per new leaf range.
+
+Use **Split** to replace one range with two equal child ranges. Each child can then be split independently down to `/29`. Use **Join** only when both complete sibling ranges are still leaves; a range cannot be joined while its sibling remains subdivided. The proportional range map and table stay synchronized with the selected range.
+
+**Copy ranges** copies the current leaf plan as tab-separated CIDRs, full address bounds, Azure-usable bounds, and usable counts. Calculator state is local to the page and does not create or edit canvas resources automatically.
+
+| Visual allocation map | Planned subnet details |
+| --- | --- |
+| ![Visual subnet calculator](assets/06-subnet-calculator.png) | ![Subnet range details and split/join actions](assets/07-subnet-details.png) |
 
 ## Random showcase
 

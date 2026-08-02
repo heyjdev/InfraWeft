@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Added
 
+- Visual IPv4 subnet calculator with proportional range mapping, independent split/join operations, canonical CIDR validation, and Azure-reserved capacity calculations.
 - Private repository governance, CI, dependency automation, security and privacy policies, and contribution templates.
 - User documentation, screenshots, and an animated README demonstration.
 - Per-launch capability authorization for Azure discovery and local artifact validation.

@@ -23,6 +23,7 @@ InfraWeft is a **local-first visual cloud infrastructure designer**. Weave topol
 ## Why InfraWeft
 
 - **Design visually** — compose VNets, subnets, gateways, security controls, edge services, and typed relationships on a React Flow canvas.
+- **Plan address space** — split and rejoin IPv4 ranges visually, with netmasks, address bounds, and Azure-reserved capacity calculated for every leaf subnet.
 - **Generate honestly** — unsupported resources and fields block export instead of disappearing into plausible-looking code.
 - **Stay local** — the app binds to `127.0.0.1`; designs and snapshots remain in browser local storage.
 - **Import safely** — Azure discovery uses fixed, read-only Azure CLI commands, and imported resources remain reference-only until explicitly adopted.
@@ -33,6 +34,8 @@ InfraWeft is a **local-first visual cloud infrastructure designer**. Weave topol
 | Visual design | Generated Terraform |
 | --- | --- |
 | ![InfraWeft design canvas](docs/assets/03-design-overview.png) | ![InfraWeft Terraform generation](docs/assets/05-generate-terraform.png) |
+
+![InfraWeft visual subnet calculator](docs/assets/06-subnet-calculator.png)
 
 The seeded **Random showcase** produces repeatable, Azure-aware demo topologies and explains every dependency it adds.
 
@@ -72,16 +75,17 @@ See [Getting started](docs/getting-started.md) for development mode, optional to
 ## Core workflow
 
 1. **Design** a topology manually or create a deterministic Random showcase.
-2. **Inspect** properties, typed relationships, validation findings, and exporter capability.
-3. **Import** an Azure topology baseline when needed; VNet address spaces and peerings are discovered, while appliance nodes currently preserve summary identity and scope only. Imported resources stay diagram-only until adoption.
-4. **Generate** Terraform, Bicep, or Azure CLI output.
-5. **Validate** locally, then review the artifact before any external deployment workflow.
+2. **Calculate** IPv4 subnet ranges when planning address space, including Azure's five reserved addresses per subnet.
+3. **Inspect** properties, typed relationships, validation findings, and exporter capability.
+4. **Import** an Azure topology baseline when needed; VNet address spaces and peerings are discovered, while appliance nodes currently preserve summary identity and scope only. Imported resources stay diagram-only until adoption.
+5. **Generate** Terraform, Bicep, or Azure CLI output.
+6. **Validate** locally, then review the artifact before any external deployment workflow.
 
 Detailed instructions are in the [User guide](docs/user-guide.md).
 
 ## Current scope
 
-InfraWeft currently models Azure virtual networks, subnets, Public IPs, Network Security Groups, route tables, NAT Gateways, Application Gateways, Azure Firewalls, VPN Gateways, Load Balancers, Private Endpoints, Azure Front Door profiles, peering, and selected typed associations.
+InfraWeft currently models Azure virtual networks, subnets, Public IPs, Network Security Groups, route tables, NAT Gateways, Application Gateways, Azure Firewalls, VPN Gateways, Load Balancers, Private Endpoints, Azure Front Door profiles, peering, and selected typed associations. Its separate visual subnet calculator plans canonical IPv4 ranges from `/0` through Azure's `/29` minimum and does not modify the topology canvas automatically.
 
 Terraform, Bicep, and Azure CLI exporters cover the modeled scope and report exact blockers for unsupported or incomplete configuration. “Supported” means InfraWeft emits the fields it claims to model; it does not mean every upstream Azure property or child resource is implemented.
 
