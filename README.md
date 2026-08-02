@@ -100,6 +100,7 @@ The loopback API requires a cryptographically random per-launch capability token
 - [Azure import](docs/azure-import.md)
 - [Exporters and validation](docs/exporters-and-validation.md)
 - [Azure Virtual Network Manager conversion](docs/avnm.md)
+- [Public repository cutover](docs/public-repository-cutover.md) — maintainer procedure
 - [Changelog](CHANGELOG.md)
 - [Privacy and local data](PRIVACY.md)
 - [Security policy](SECURITY.md)

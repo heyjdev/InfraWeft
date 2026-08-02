@@ -9,7 +9,7 @@ Until the project reaches 1.0, security fixes are provided only for the latest p
 Do not open an issue for a suspected vulnerability.
 
 - **While the repository is private:** authorized collaborators should contact a maintainer directly through the existing private channel by which repository access was granted.
-- **Before public release:** repository maintainers will enable GitHub private vulnerability reporting and update this policy with the active reporting path.
+- **When the repository is public:** use GitHub's confidential [Report a vulnerability](https://github.com/heyjdev/InfraWeft/security/advisories/new) form. The form becomes active during the controlled public cutover; if GitHub does not show it, do not substitute a public issue.
 
 Include affected versions, reproduction steps, impact, and any suggested mitigation. Do not include real cloud credentials, subscription data, topology, or secrets. If sensitive material was exposed, revoke or rotate it before reporting; deleting a message or commit is not sufficient.
 
