@@ -38,6 +38,7 @@ The script pins GitHub REST API version `2026-03-10`, creates or updates the nam
 - Secret scanning
 - Secret-scanning push protection
 - CodeQL default setup with the default query suite
+- GitHub Actions restricted to GitHub-owned actions with full-SHA pinning enforced
 - An active `main` ruleset requiring:
   - pull requests;
   - all nine CI matrix checks;
