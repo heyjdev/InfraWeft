@@ -52,3 +52,5 @@ The ruleset requires no approving review because this is currently a single-main
 ## Rollback
 
 Visibility can be changed back to private, but publication cannot make disclosed Git objects private again. If any secret or private infrastructure data is found after cutover, rotate it first; changing visibility or deleting a commit is not remediation.
+
+<!-- Public cutover verification: harmless draft PR; do not merge. -->
