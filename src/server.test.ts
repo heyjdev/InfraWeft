@@ -1,11 +1,15 @@
 import { afterEach, describe, expect, it } from 'vitest'
+import { mkdtemp, rm, writeFile } from 'node:fs/promises'
 import { request, type Server } from 'node:http'
 import { createServer } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { createApp, startServer } from '../server/index'
 
 const API_TOKEN = 'test-capability-token-with-sufficient-entropy'
 const TOKEN_HEADER = 'x-infraweft-token'
 const servers: Server[] = []
+const temporaryDirectories: string[] = []
 
 async function freePort() {
   const probe = createServer()
@@ -41,6 +45,7 @@ afterEach(async () => {
   await Promise.all(servers.splice(0).map((server) => new Promise<void>((resolve, reject) => {
     server.close((error) => error ? reject(error) : resolve())
   })))
+  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })))
 })
 
 describe('local API capability authorization', () => {
@@ -102,5 +107,39 @@ describe('local API capability authorization', () => {
 
     expect(response.status).toBe(400)
     await expect(response.json()).resolves.toEqual({ error: 'Generated code is required.' })
+  })
+
+  it('serves the SPA shell from memory after startup', async () => {
+    const uiDirectory = await mkdtemp(join(tmpdir(), 'infraweft-ui-'))
+    temporaryDirectories.push(uiDirectory)
+    const indexPath = join(uiDirectory, 'index.html')
+    await writeFile(indexPath, '<!doctype html><title>cached shell</title>')
+    const port = await freePort()
+    const { server, url } = await startServer({ port, serveUi: true, uiDirectory, apiToken: API_TOKEN })
+    servers.push(server)
+
+    await rm(indexPath)
+    const response = await fetch(`${url}/designer`)
+    const missingApiResponse = await fetch(`${url}/api/missing`)
+
+    expect(response.status).toBe(200)
+    expect(response.headers.get('content-type')).toContain('text/html')
+    expect(response.headers.get('cache-control')).toBe('no-cache')
+    await expect(response.text()).resolves.toContain('<title>cached shell</title>')
+    expect(missingApiResponse.status).toBe(404)
+  })
+
+  it('serves an empty cached SPA shell', async () => {
+    const uiDirectory = await mkdtemp(join(tmpdir(), 'infraweft-ui-'))
+    temporaryDirectories.push(uiDirectory)
+    await writeFile(join(uiDirectory, 'index.html'), '')
+    const port = await freePort()
+    const { server, url } = await startServer({ port, serveUi: true, uiDirectory, apiToken: API_TOKEN })
+    servers.push(server)
+
+    const response = await fetch(`${url}/designer`)
+
+    expect(response.status).toBe(200)
+    await expect(response.text()).resolves.toBe('')
   })
 })

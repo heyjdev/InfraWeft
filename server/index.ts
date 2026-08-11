@@ -1,7 +1,7 @@
 import express from 'express'
 import { execFile } from 'node:child_process'
 import { randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import type { Server } from 'node:http'
 import { dirname, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -20,7 +20,9 @@ export function createApp(options: AppOptions) {
   const app = express()
   const port = options.port ?? Number(process.env.API_PORT || DEFAULT_PORT)
   const uiDirectory = options.uiDirectory ?? join(packageRoot, 'dist')
-  const serveUi = options.serveUi ?? existsSync(join(uiDirectory, 'index.html'))
+  const uiIndexPath = join(uiDirectory, 'index.html')
+  const serveUi = options.serveUi ?? existsSync(uiIndexPath)
+  const spaShell = serveUi && existsSync(uiIndexPath) ? readFileSync(uiIndexPath, 'utf8') : undefined
   const allowedOrigins = new Set([
     `http://127.0.0.1:${port}`,
     `http://localhost:${port}`,
@@ -152,8 +154,9 @@ export function createApp(options: AppOptions) {
   if (serveUi) {
     app.use(express.static(uiDirectory, { index: false, maxAge: '1h', immutable: false }))
     app.use((req, res, next) => {
-      if (req.method !== 'GET' || req.path.startsWith('/api/')) return next()
-      res.sendFile(join(uiDirectory, 'index.html'))
+      if (req.method !== 'GET' || req.path.startsWith('/api/') || spaShell === undefined) return next()
+      res.set('Cache-Control', 'no-cache')
+      res.type('html').send(spaShell)
     })
   }
 
